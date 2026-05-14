@@ -16,7 +16,7 @@ Project trich xuat thong tin hoa don theo pipeline:
 ## Cai dat
 
 ```powershell
-cd C:\Users\PC\Documents\datn_hao\DATN\invoice_ocr_gcn_demo
+cd <project_dir>\src
 pip install -r requirements.txt
 ```
 
@@ -31,6 +31,27 @@ MODEL_ID=nielsr/layoutlmv3-finetuned-funsd
 Ban co the doi model khac bang cach sua `MODEL_ID`.
 
 ## Cach chay
+
+### Cach chay nhanh
+
+```powershell
+cd <project_dir>\src
+
+# GCN infer
+python .\pipeline_runner.py gcn_infer --image .\data\anh_test.jpg
+
+# Pretrained baseline (doc .env)
+python .\pipeline_runner.py pretrained --project-dir .
+
+# Evaluate
+python .\pipeline_runner.py evaluate --pred-json .\outputs\ocr_result.json --gt-json path\to\gt.json
+
+# Train GCN
+python .\pipeline_runner.py train_gcn --dataset-json path\to\gcn_dataset.json
+
+# Train OCR command wrapper
+python .\pipeline_runner.py train_ocr --command "python your_ocr_train_script.py"
+```
 
 ### 1) Pretrained baseline (khong fine-tune)
 

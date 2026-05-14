@@ -1,0 +1,869 @@
+{
+  "model_id": "nielsr/layoutlmv3-finetuned-funsd",
+  "tokens": [
+    {
+      "text": "Ġ14",
+      "label": "B-ANSWER"
+    },
+    {
+      "text": ",",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "8",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "cm",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠH",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "OA",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠDON",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠB",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "AN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠH",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ANG",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠR",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "uc",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ota",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠDi",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "C",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠKh",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ach",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġhang",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ":",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠD",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ja",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġchi",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġsan",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġx",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "at",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ":",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠHT",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "X",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġru",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ou",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠThan",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "h",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "han",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ",",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠSD",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "T",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ":",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠD",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ao",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠX",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "a",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "N",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "gh",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ia",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠDan",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ",",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠKim",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠDong",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ".",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Hung",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠYen",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ".",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠVan",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġph",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ong",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġd",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ai",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġd",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ien",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ":",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "So",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ12",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ",",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ng",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ach",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ1",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠD",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ja",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġchi",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ":",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ.",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "go",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ4",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ".",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "D",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ong",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠMe",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ",",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Me",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠTri",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ha",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠNo",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "i",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠWebsite",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ":",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ru",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "oud",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "a",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "oc",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ong",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "than",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "h",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ".",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "com",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠSD",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "T",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": ":",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "09",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "747",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "29",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "007",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠST",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "T",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠSAN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠPH",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "AM",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠSOL",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "U",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ONG",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠDON",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠG",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "IA",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠTH",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "AN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "H",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠTI",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "EN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġmo",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġd",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ua",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ-",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġba",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġk",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ich",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġt",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ao",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġme",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "o",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ5",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġch",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "uo",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "i",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġhot",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġnep",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġca",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "i",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġho",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "a",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġv",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ang",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ21",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "cm",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġt",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ao",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġch",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ai",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġ8",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠRug",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "u",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġmo",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġch",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ai",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠH",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ANCE",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠYOU",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠBR",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "AND",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠTong",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġcon",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "g",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "gay",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "....",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "th",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ang",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "....",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "nam",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "20",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "..",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠKh",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ach",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġhang",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠN",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "gu",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "oi",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġban",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ĠCam",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġon",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġqu",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "y",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġkh",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ach",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġda",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġsi",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġd",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ung",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġdich",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġv",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "y",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġc",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ua",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġch",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "ung",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "Ġto",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "i",
+      "label": "I-ANSWER"
+    },
+    {
+      "text": "!",
+      "label": "I-ANSWER"
+    }
+  ],
+  "invoice": {
+    "date": null,
+    "tax_code": null,
+    "total_amount": null,
+    "seller_name": null
+  },
+  "note": "Pretrained baseline only (no fine-tune on your VN invoices).",
+  "ocr_boxes_image": "outputs/ocr_boxes_pretrained.jpg"
+}

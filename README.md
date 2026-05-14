@@ -46,8 +46,11 @@ python .\pipeline_runner.py pretrained --project-dir .
 # Evaluate
 python .\pipeline_runner.py evaluate --pred-json .\outputs\ocr_result.json --gt-json path\to\gt.json
 
-# Train GCN
-python .\pipeline_runner.py train_gcn --dataset-json path\to\gcn_dataset.json
+# Train GCN Stage A (du lieu chung: receipt/invoice)
+python .\pipeline_runner.py train_gcn_stage_a --dataset-json path\to\stage_a_dataset.json --checkpoint outputs\checkpoints\gcn_stage_a.pt
+
+# Train GCN Stage B (du lieu hoa don tieng Viet, fine-tune tu Stage A)
+python .\pipeline_runner.py train_gcn_stage_b --dataset-json path\to\stage_b_vi_dataset.json --base-checkpoint outputs\checkpoints\gcn_stage_a.pt --checkpoint outputs\checkpoints\gcn_stage_b.pt
 
 # Train OCR command wrapper
 python .\pipeline_runner.py train_ocr --command "python your_ocr_train_script.py"
@@ -81,10 +84,14 @@ Hoac:
 python .\pipeline_runner.py gcn_infer --image .\data\anh_test.jpg --lang en --ocr-debug-image outputs/ocr_boxes.jpg --output-json outputs/ocr_result.json
 ```
 
-### 3) Train GCN
+### 3) Train GCN (2 stage)
 
 ```powershell
-python .\pipeline_runner.py train_gcn --dataset-json .\data\train_gcn.json --checkpoint outputs/checkpoints/gcn_invoice.pt --epochs 30 --lr 1e-3
+# Stage A: train tren du lieu chung (SROIE/CORD/du lieu receipt khac)
+python .\pipeline_runner.py train_gcn_stage_a --dataset-json .\data\stage_a_dataset.json --checkpoint outputs/checkpoints/gcn_stage_a.pt --epochs 30 --lr 1e-3
+
+# Stage B: fine-tune tren du lieu hoa don tieng Viet
+python .\pipeline_runner.py train_gcn_stage_b --dataset-json .\data\stage_b_vi_dataset.json --base-checkpoint outputs/checkpoints/gcn_stage_a.pt --checkpoint outputs/checkpoints/gcn_stage_b.pt --epochs 20 --lr 5e-4
 ```
 
 ### 4) Evaluate

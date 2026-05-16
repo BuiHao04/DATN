@@ -6,12 +6,14 @@ Project trich xuat thong tin hoa don theo pipeline:
 
 ## Thu muc chinh
 
-- `invoice_ocr_gcn_demo/`: source code chinh.
-- `invoice_ocr_gcn_demo/pipeline/core/`: logic core (ocr, graph, gcn, postprocess, visualize, schema).
-- `invoice_ocr_gcn_demo/pipeline/services/`: service layer cho OCR, pretrained infer, GCN infer/train, eval.
-- `invoice_ocr_gcn_demo/pipeline_runner.py`: entrypoint CLI cho cac mode.
-- `invoice_ocr_gcn_demo/pretrained_invoice_baseline.py`: wrapper chay nhanh mode pretrained.
-- `invoice_ocr_gcn_demo/test_ocr_invoice.py`: wrapper chay nhanh mode GCN infer.
+- `src/`: source code chinh.
+- `src/pipeline/core/`: logic core (ocr, graph, gcn, postprocess, visualize, schema).
+- `src/pipeline/services/`: service layer cho OCR, pretrained infer, GCN infer/train, eval, data convert.
+- `src/pipeline_runner.py`: entrypoint CLI cho tat ca mode.
+- `src/pretrained_invoice_baseline.py`: wrapper chay nhanh mode pretrained.
+- `src/test_ocr_invoice.py`: wrapper chay nhanh mode GCN infer.
+- `src/render_invoice_text.py`: render ket qua JSON sang TXT/MD.
+- `src/download_data.py`: download/convert dataset HuggingFace generic -> GCN CSV.
 
 ## Cai dat
 
@@ -22,13 +24,73 @@ pip install -r requirements.txt
 
 ## Cau hinh `.env`
 
-Tao file `.env` trong `invoice_ocr_gcn_demo`:
+Tao file `.env` trong `src`:
 
 ```env
 MODEL_ID=nielsr/layoutlmv3-finetuned-funsd
 ```
 
 Ban co the doi model khac bang cach sua `MODEL_ID`.
+
+## Huong dan theo tung file
+
+### 1) `pipeline_runner.py` (file chinh)
+Day la command hub. Moi tac vu nen uu tien chay tu file nay.
+
+```powershell
+python .\pipeline_runner.py -h
+```
+
+Mode chinh:
+- `gcn_infer`: OCR + Graph + GCN infer.
+- `pretrained`: baseline LayoutLMv3.
+- `train_gcn_stage_a`, `train_gcn_stage_b`, `train_gcn_full`.
+- `test_gcn`: danh gia checkpoint GCN.
+- `evaluate`: danh gia file predict vs ground-truth.
+- `preprocess_gcn_dataset`: CSV -> JSON cho train GCN.
+- `convert_hf_to_gcn_csv`: HF dataset generic -> CSV.
+
+### 2) `test_ocr_invoice.py` (wrapper nhanh cho infer)
+Khi can test nhanh 1 anh voi luong GCN infer:
+
+```powershell
+python .\test_ocr_invoice.py
+```
+
+### 3) `pretrained_invoice_baseline.py` (wrapper nhanh pretrained)
+Khi can chay baseline doc `.env`:
+
+```powershell
+python .\pretrained_invoice_baseline.py
+```
+
+### 4) `render_invoice_text.py` (xuat ket qua de doc)
+Doc `outputs/ocr_result.json` va xuat:
+- `outputs/invoice_final.txt`
+- `outputs/invoice_final.md`
+
+```powershell
+python .\render_invoice_text.py
+```
+
+### 5) `download_data.py` (download dataset tong quat)
+Dung cho nhieu dataset HuggingFace (chi can map dung field):
+
+```powershell
+python .\download_data.py --dataset-id naver-clova-ix/cord-v2 --split train
+```
+
+Neu field dat ten khac:
+
+```powershell
+python .\download_data.py --dataset-id your_org/your_dataset --split train --doc-id-field document_id --text-field token_text --label-field tag --bbox-field box --score-field confidence
+```
+
+Neu can map nhan:
+
+```powershell
+python .\download_data.py --dataset-id your_org/your_dataset --label-map .\data\label_map.json
+```
 
 ## Cach chay
 

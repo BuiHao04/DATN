@@ -95,6 +95,18 @@ def cmd_train_ocr(args: argparse.Namespace) -> None:
     logger.info("OCR training command done")
 
 
+def cmd_test_gcn(args: argparse.Namespace) -> None:
+    from pipeline.services.gcn_evaluation_service import GCNEvaluationService
+
+    service = GCNEvaluationService()
+    out = service.evaluate(
+        dataset_json_path=args.dataset_json,
+        checkpoint_path=args.checkpoint,
+        output_eval_path=args.output_eval,
+    )
+    logger.info("GCN test/eval done: {}", out)
+
+
 def cmd_preprocess_gcn_dataset(args: argparse.Namespace) -> None:
     from pipeline.services.gcn_dataset_preprocess_service import GCNDatasetPreprocessService
 
@@ -115,6 +127,118 @@ def cmd_preprocess_gcn_dataset(args: argparse.Namespace) -> None:
         min_nodes_per_graph=args.min_nodes_per_graph,
     )
     logger.info("GCN dataset preprocess done: {}", out)
+
+
+def cmd_convert_hf_cord_to_csv(args: argparse.Namespace) -> None:
+    from pipeline.services.hf_cord_to_gcn_csv_service import HFCordToGcnCsvService
+
+    service = HFCordToGcnCsvService()
+    output_csv = args.output_csv or f"data/cord_{args.split}_nodes.csv"
+    out = service.convert(
+        dataset_id=args.dataset_id,
+        split=args.split,
+        output_csv_path=output_csv,
+        limit=args.limit,
+    )
+    logger.info("HF CORD -> CSV done: {}", out)
+
+
+def cmd_convert_hf_to_gcn_csv(args: argparse.Namespace) -> None:
+    from pipeline.services.hf_generic_to_gcn_csv_service import HFGenericToGcnCsvService
+
+    service = HFGenericToGcnCsvService()
+    output_csv = args.output_csv or f"data/{args.split}_nodes.csv"
+    label_map = service.load_label_map(args.label_map)
+    out = service.convert(
+        dataset_id=args.dataset_id,
+        split=args.split,
+        output_csv_path=output_csv,
+        doc_id_field=args.doc_id_field,
+        text_field=args.text_field,
+        label_field=args.label_field,
+        bbox_field=args.bbox_field,
+        score_field=args.score_field,
+        label_map=label_map,
+        limit=args.limit,
+    )
+    logger.info("HF generic -> GCN CSV done: {}", out)
+
+
+def cmd_train_gcn_full(args: argparse.Namespace) -> None:
+    """One-command training flow:
+    optional preprocess -> stage A train -> stage B train -> optional eval.
+    """
+    from pipeline.services.gcn_dataset_preprocess_service import GCNDatasetPreprocessService
+    from pipeline.services.gcn_training_service import GCNTrainingService
+    from pipeline.services.gcn_evaluation_service import GCNEvaluationService
+
+    preprocess = GCNDatasetPreprocessService()
+    trainer = GCNTrainingService()
+    evaluator = GCNEvaluationService()
+
+    stage_a_json = args.stage_a_json
+    stage_b_json = args.stage_b_json
+
+    # If CSV is provided, build JSON automatically.
+    if args.stage_a_csv:
+        stage_a_json = preprocess.preprocess_csv(
+            input_csv_path=args.stage_a_csv,
+            output_json_path=stage_a_json,
+            doc_id_col=args.doc_id_col,
+            text_col=args.text_col,
+            label_col=args.label_col,
+            score_col=args.score_col,
+            x1_col=args.x1_col,
+            y1_col=args.y1_col,
+            x2_col=args.x2_col,
+            y2_col=args.y2_col,
+            same_line_ratio=args.same_line_ratio,
+            near_threshold=args.near_threshold,
+            min_nodes_per_graph=args.min_nodes_per_graph,
+        )
+
+    if args.stage_b_csv:
+        stage_b_json = preprocess.preprocess_csv(
+            input_csv_path=args.stage_b_csv,
+            output_json_path=stage_b_json,
+            doc_id_col=args.doc_id_col,
+            text_col=args.text_col,
+            label_col=args.label_col,
+            score_col=args.score_col,
+            x1_col=args.x1_col,
+            y1_col=args.y1_col,
+            x2_col=args.x2_col,
+            y2_col=args.y2_col,
+            same_line_ratio=args.same_line_ratio,
+            near_threshold=args.near_threshold,
+            min_nodes_per_graph=args.min_nodes_per_graph,
+        )
+
+    stage_a_ckpt = trainer.train_stage_a(
+        dataset_json_path=stage_a_json,
+        checkpoint_path=args.stage_a_ckpt,
+        epochs=args.stage_a_epochs,
+        lr=args.stage_a_lr,
+        init_checkpoint=args.init_checkpoint,
+    )
+
+    stage_b_ckpt = trainer.train_stage_b(
+        dataset_json_path=stage_b_json,
+        checkpoint_path=args.stage_b_ckpt,
+        base_checkpoint=stage_a_ckpt,
+        epochs=args.stage_b_epochs,
+        lr=args.stage_b_lr,
+    )
+
+    if args.eval_json:
+        report_path = evaluator.evaluate(
+            dataset_json_path=args.eval_json,
+            checkpoint_path=stage_b_ckpt,
+            output_eval_path=args.output_eval,
+        )
+        logger.info("GCN full flow done. Final ckpt: {} | Eval: {}", stage_b_ckpt, report_path)
+    else:
+        logger.info("GCN full flow done. Final ckpt: {}", stage_b_ckpt)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -172,6 +296,12 @@ def build_parser() -> argparse.ArgumentParser:
     to.add_argument("--workdir", default=None)
     to.set_defaults(func=cmd_train_ocr)
 
+    te = sub.add_parser("test_gcn")
+    te.add_argument("--dataset-json", required=True)
+    te.add_argument("--checkpoint", required=True)
+    te.add_argument("--output-eval", default="outputs/gcn_eval_report.json")
+    te.set_defaults(func=cmd_test_gcn)
+
     pg = sub.add_parser("preprocess_gcn_dataset")
     pg.add_argument("--input-csv", required=True)
     pg.add_argument("--output-json", required=True)
@@ -187,6 +317,59 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("--near-threshold", type=float, default=250.0)
     pg.add_argument("--min-nodes-per-graph", type=int, default=1)
     pg.set_defaults(func=cmd_preprocess_gcn_dataset)
+
+    ch = sub.add_parser("convert_hf_cord_to_csv")
+    ch.add_argument("--dataset-id", default="naver-clova-ix/cord-v2")
+    ch.add_argument("--split", default="train")
+    ch.add_argument("--output-csv", default=None)
+    ch.add_argument("--limit", type=int, default=None)
+    ch.set_defaults(func=cmd_convert_hf_cord_to_csv)
+
+    hg = sub.add_parser("convert_hf_to_gcn_csv")
+    hg.add_argument("--dataset-id", required=True)
+    hg.add_argument("--split", default="train")
+    hg.add_argument("--output-csv", default=None)
+    hg.add_argument("--doc-id-field", default="id")
+    hg.add_argument("--text-field", default="text")
+    hg.add_argument("--label-field", default="label")
+    hg.add_argument("--bbox-field", default="bbox")
+    hg.add_argument("--score-field", default=None)
+    hg.add_argument(
+        "--label-map",
+        default=None,
+        help="JSON string or path to JSON file, e.g. '{\"0\":\"OTHER\",\"1\":\"DATE\"}'",
+    )
+    hg.add_argument("--limit", type=int, default=None)
+    hg.set_defaults(func=cmd_convert_hf_to_gcn_csv)
+
+    # Single command for full training flow (A -> B -> eval).
+    tf = sub.add_parser("train_gcn_full")
+    tf.add_argument("--stage-a-csv", default=None)
+    tf.add_argument("--stage-b-csv", default=None)
+    tf.add_argument("--stage-a-json", default="data/stage_a_dataset.json")
+    tf.add_argument("--stage-b-json", default="data/stage_b_vi_dataset.json")
+    tf.add_argument("--stage-a-ckpt", default="outputs/checkpoints/gcn_stage_a.pt")
+    tf.add_argument("--stage-b-ckpt", default="outputs/checkpoints/gcn_stage_b.pt")
+    tf.add_argument("--stage-a-epochs", type=int, default=30)
+    tf.add_argument("--stage-b-epochs", type=int, default=20)
+    tf.add_argument("--stage-a-lr", type=float, default=1e-3)
+    tf.add_argument("--stage-b-lr", type=float, default=5e-4)
+    tf.add_argument("--init-checkpoint", default=None)
+    tf.add_argument("--eval-json", default=None)
+    tf.add_argument("--output-eval", default="outputs/gcn_eval_report.json")
+    # Preprocess options (used only when stage-a-csv or stage-b-csv is passed).
+    tf.add_argument("--doc-id-col", default="doc_id")
+    tf.add_argument("--text-col", default="text")
+    tf.add_argument("--label-col", default="label")
+    tf.add_argument("--score-col", default="score")
+    tf.add_argument("--x1-col", default="x1")
+    tf.add_argument("--y1-col", default="y1")
+    tf.add_argument("--x2-col", default="x2")
+    tf.add_argument("--y2-col", default="y2")
+    tf.add_argument("--same-line-ratio", type=float, default=1.2)
+    tf.add_argument("--near-threshold", type=float, default=250.0)
+    tf.add_argument("--min-nodes-per-graph", type=int, default=1)
+    tf.set_defaults(func=cmd_train_gcn_full)
 
     return p
 

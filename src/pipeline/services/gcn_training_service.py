@@ -22,7 +22,15 @@ class GCNTrainingService:
     ]
     """
 
-    def train(self, dataset_json_path: str, checkpoint_path: str, epochs: int = 30, lr: float = 1e-3) -> str:
+    def _train_once(
+        self,
+        dataset_json_path: str,
+        checkpoint_path: str,
+        epochs: int = 30,
+        lr: float = 1e-3,
+        init_checkpoint: str | None = None,
+        stage_name: str = "GCN",
+    ) -> str:
         data = json.loads(Path(dataset_json_path).read_text(encoding="utf-8"))
         samples = data.get("samples", [])
         if not samples:
@@ -32,6 +40,9 @@ class GCNTrainingService:
         out_channels = max(max(s["y"]) for s in samples) + 1
 
         model = InvoiceGCN(in_channels=in_channels, hidden_channels=64, out_channels=out_channels)
+        if init_checkpoint:
+            logger.info("[{}] Load init checkpoint: {}", stage_name, init_checkpoint)
+            model.load_state_dict(torch.load(init_checkpoint, map_location="cpu"))
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
         model.train()
@@ -52,10 +63,62 @@ class GCNTrainingService:
                 optimizer.step()
                 total_loss += float(loss.item())
 
-            logger.info("Epoch {}/{} - loss={:.6f}", epoch, epochs, total_loss / max(len(samples), 1))
+            logger.info(
+                "[{}] Epoch {}/{} - loss={:.6f}",
+                stage_name,
+                epoch,
+                epochs,
+                total_loss / max(len(samples), 1),
+            )
 
         ckpt = Path(checkpoint_path)
         ckpt.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), ckpt)
-        logger.info("Saved GCN checkpoint: {}", ckpt)
+        logger.info("[{}] Saved checkpoint: {}", stage_name, ckpt)
         return str(ckpt)
+
+    # Stage A: pretrain/fine-tune on generic receipt/invoice dataset.
+    def train_stage_a(
+        self,
+        dataset_json_path: str,
+        checkpoint_path: str,
+        epochs: int = 30,
+        lr: float = 1e-3,
+        init_checkpoint: str | None = None,
+    ) -> str:
+        return self._train_once(
+            dataset_json_path=dataset_json_path,
+            checkpoint_path=checkpoint_path,
+            epochs=epochs,
+            lr=lr,
+            init_checkpoint=init_checkpoint,
+            stage_name="Stage A",
+        )
+
+    # Stage B: fine-tune on Vietnamese invoice dataset (main stage for final quality).
+    def train_stage_b(
+        self,
+        dataset_json_path: str,
+        checkpoint_path: str,
+        base_checkpoint: str,
+        epochs: int = 30,
+        lr: float = 1e-3,
+    ) -> str:
+        return self._train_once(
+            dataset_json_path=dataset_json_path,
+            checkpoint_path=checkpoint_path,
+            epochs=epochs,
+            lr=lr,
+            init_checkpoint=base_checkpoint,
+            stage_name="Stage B",
+        )
+
+    # Backward-compatible single training entry.
+    def train(self, dataset_json_path: str, checkpoint_path: str, epochs: int = 30, lr: float = 1e-3) -> str:
+        return self._train_once(
+            dataset_json_path=dataset_json_path,
+            checkpoint_path=checkpoint_path,
+            epochs=epochs,
+            lr=lr,
+            stage_name="GCN",
+        )

@@ -34,7 +34,23 @@ class HFGenericToGcnCsvService:
         except Exception as exc:
             raise RuntimeError("Missing dependency 'datasets'. Install with: pip install datasets") from exc
 
-        ds = load_dataset(dataset_id, split=split, streaming=streaming)
+        top_cols = self._infer_top_level_columns(
+            doc_id_field=doc_id_field,
+            text_field=text_field,
+            label_field=label_field,
+            bbox_field=bbox_field,
+            score_field=score_field,
+        )
+        try:
+            ds = load_dataset(
+                dataset_id,
+                split=split,
+                streaming=streaming,
+                columns=top_cols,
+            )
+        except TypeError:
+            # Older datasets versions may not support 'columns' here.
+            ds = load_dataset(dataset_id, split=split, streaming=streaming)
         rows: list[dict[str, str]] = []
 
         for idx, sample in enumerate(ds):
@@ -90,6 +106,24 @@ class HFGenericToGcnCsvService:
             streaming,
         )
         return str(out)
+
+    def _infer_top_level_columns(
+        self,
+        doc_id_field: str,
+        text_field: str,
+        label_field: str,
+        bbox_field: str,
+        score_field: str | None,
+    ) -> list[str]:
+        cols = {
+            doc_id_field.split(".")[0],
+            text_field.split(".")[0],
+            label_field.split(".")[0],
+            bbox_field.split(".")[0],
+        }
+        if score_field:
+            cols.add(score_field.split(".")[0])
+        return sorted(c for c in cols if c)
 
     def _build_doc_id(self, sample: dict[str, Any], doc_id_field: str, idx: int) -> str:
         val = self._get_by_path(sample, doc_id_field)

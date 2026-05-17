@@ -28,12 +28,13 @@ class HFCordToGcnCsvService:
 
         # CORD parquet has heavy "image" column. Keep only metadata columns to reduce RAM.
         wanted_cols = ["ground_truth", "meta", "id"]
+        cols = self._pick_existing_columns(dataset_id, wanted_cols)
         try:
             ds = load_dataset(
                 dataset_id,
                 split=split,
                 streaming=streaming,
-                columns=wanted_cols,
+                columns=cols if cols else None,
             )
         except TypeError:
             ds = load_dataset(dataset_id, split=split, streaming=streaming)
@@ -92,6 +93,21 @@ class HFCordToGcnCsvService:
         )
         logger.info("Supported GCN labels: {}", ", ".join(sorted(LABEL_TO_ID.keys())))
         return str(output_path)
+
+    def _pick_existing_columns(self, dataset_id: str, wanted_cols: list[str]) -> list[str]:
+        try:
+            from datasets import load_dataset_builder
+            builder = load_dataset_builder(dataset_id)
+            features = getattr(builder.info, "features", None)
+            if not features:
+                return ["ground_truth"]
+            available = set(features.keys())
+            cols = [c for c in wanted_cols if c in available]
+            if "ground_truth" not in cols and "ground_truth" in available:
+                cols.insert(0, "ground_truth")
+            return cols if cols else ["ground_truth"]
+        except Exception:
+            return ["ground_truth"]
 
     def _build_doc_id(self, sample: dict[str, Any], idx: int) -> str:
         meta = sample.get("meta") if isinstance(sample, dict) else None

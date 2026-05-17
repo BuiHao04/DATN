@@ -24,33 +24,52 @@ def main() -> None:
     project_dir = Path(__file__).resolve().parent
     output_csv = args.output_csv or str(project_dir / "data" / f"{args.split}_nodes.csv")
 
-    cmd = [
-        sys.executable,
-        "pipeline_runner.py",
-        "convert_hf_to_gcn_csv",
-        "--dataset-id",
-        args.dataset_id,
-        "--split",
-        args.split,
-        "--output-csv",
-        output_csv,
-        "--doc-id-field",
-        args.doc_id_field,
-        "--text-field",
-        args.text_field,
-        "--label-field",
-        args.label_field,
-        "--bbox-field",
-        args.bbox_field,
-    ]
+    is_cord = "cord" in args.dataset_id.lower()
 
-    if args.score_field:
-        cmd.extend(["--score-field", args.score_field])
-    if args.label_map:
-        cmd.extend(["--label-map", args.label_map])
+    if is_cord:
+        # CORD has custom schema (ground_truth JSON), use dedicated converter.
+        cmd = [
+            sys.executable,
+            "pipeline_runner.py",
+            "convert_hf_cord_to_csv",
+            "--dataset-id",
+            args.dataset_id,
+            "--split",
+            args.split,
+            "--output-csv",
+            output_csv,
+        ]
+    else:
+        # Generic converter for datasets that expose text/label/bbox style fields.
+        cmd = [
+            sys.executable,
+            "pipeline_runner.py",
+            "convert_hf_to_gcn_csv",
+            "--dataset-id",
+            args.dataset_id,
+            "--split",
+            args.split,
+            "--output-csv",
+            output_csv,
+            "--doc-id-field",
+            args.doc_id_field,
+            "--text-field",
+            args.text_field,
+            "--label-field",
+            args.label_field,
+            "--bbox-field",
+            args.bbox_field,
+        ]
+
+    if not is_cord:
+        if args.score_field:
+            cmd.extend(["--score-field", args.score_field])
+        if args.label_map:
+            cmd.extend(["--label-map", args.label_map])
+        cmd.extend(["--streaming", str(args.streaming)])
+
     if args.limit is not None:
         cmd.extend(["--limit", str(args.limit)])
-    cmd.extend(["--streaming", str(args.streaming)])
 
     subprocess.run(cmd, check=True, cwd=project_dir)
 

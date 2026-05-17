@@ -19,13 +19,24 @@ class HFCordToGcnCsvService:
         split: str,
         output_csv_path: str,
         limit: int | None = None,
+        streaming: bool = True,
     ) -> str:
         try:
             from datasets import load_dataset
         except Exception as exc:
             raise RuntimeError("Missing dependency 'datasets'. Install with: pip install datasets") from exc
 
-        ds = load_dataset(dataset_id, split=split)
+        # CORD parquet has heavy "image" column. Keep only metadata columns to reduce RAM.
+        wanted_cols = ["ground_truth", "meta", "id"]
+        try:
+            ds = load_dataset(
+                dataset_id,
+                split=split,
+                streaming=streaming,
+                columns=wanted_cols,
+            )
+        except TypeError:
+            ds = load_dataset(dataset_id, split=split, streaming=streaming)
         rows: list[dict[str, str]] = []
         skipped_docs = 0
 
@@ -73,10 +84,11 @@ class HFCordToGcnCsvService:
             writer.writerows(rows)
 
         logger.info(
-            "Saved CORD->GCN CSV: {} (rows={}, skipped_docs={})",
+            "Saved CORD->GCN CSV: {} (rows={}, skipped_docs={}, streaming={})",
             output_path,
             len(rows),
             skipped_docs,
+            streaming,
         )
         logger.info("Supported GCN labels: {}", ", ".join(sorted(LABEL_TO_ID.keys())))
         return str(output_path)

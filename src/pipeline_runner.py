@@ -139,6 +139,7 @@ def cmd_convert_hf_cord_to_csv(args: argparse.Namespace) -> None:
         split=args.split,
         output_csv_path=output_csv,
         limit=args.limit,
+        streaming=bool(args.streaming),
     )
     logger.info("HF CORD -> CSV done: {}", out)
 
@@ -160,7 +161,7 @@ def cmd_convert_hf_to_gcn_csv(args: argparse.Namespace) -> None:
         score_field=args.score_field,
         label_map=label_map,
         limit=args.limit,
-        streaming=args.streaming,
+        streaming=bool(args.streaming),
     )
     logger.info("HF generic -> GCN CSV done: {}", out)
 
@@ -324,6 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     ch.add_argument("--split", default="train")
     ch.add_argument("--output-csv", default=None)
     ch.add_argument("--limit", type=int, default=None)
+    ch.add_argument("--streaming", type=int, default=1, help="1=low RAM mode, 0=normal mode")
     ch.set_defaults(func=cmd_convert_hf_cord_to_csv)
 
     hg = sub.add_parser("convert_hf_to_gcn_csv")

@@ -38,6 +38,8 @@ def main() -> None:
             args.split,
             "--output-csv",
             output_csv,
+            "--streaming",
+            str(args.streaming),
         ]
     else:
         # Generic converter for datasets that expose text/label/bbox style fields.

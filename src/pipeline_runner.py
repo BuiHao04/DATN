@@ -55,6 +55,8 @@ def cmd_train_gcn(args: argparse.Namespace) -> None:
         checkpoint_path=args.checkpoint,
         epochs=args.epochs,
         lr=args.lr,
+        val_dataset_json_path=args.val_dataset_json,
+        early_stop_patience=args.early_stop_patience,
     )
     logger.info("GCN training done: {}", out)
 
@@ -69,6 +71,8 @@ def cmd_train_gcn_stage_a(args: argparse.Namespace) -> None:
         epochs=args.epochs,
         lr=args.lr,
         init_checkpoint=args.init_checkpoint,
+        val_dataset_json_path=args.val_dataset_json,
+        early_stop_patience=args.early_stop_patience,
     )
     logger.info("GCN Stage A done: {}", out)
 
@@ -83,6 +87,8 @@ def cmd_train_gcn_stage_b(args: argparse.Namespace) -> None:
         base_checkpoint=args.base_checkpoint,
         epochs=args.epochs,
         lr=args.lr,
+        val_dataset_json_path=args.val_dataset_json,
+        early_stop_patience=args.early_stop_patience,
     )
     logger.info("GCN Stage B done: {}", out)
 
@@ -273,6 +279,8 @@ def build_parser() -> argparse.ArgumentParser:
     tg.add_argument("--checkpoint", default="outputs/checkpoints/gcn_invoice.pt")
     tg.add_argument("--epochs", type=int, default=30)
     tg.add_argument("--lr", type=float, default=1e-3)
+    tg.add_argument("--val-dataset-json", default=None)
+    tg.add_argument("--early-stop-patience", type=int, default=0)
     tg.set_defaults(func=cmd_train_gcn)
 
     # Train Stage A only (generic receipt/invoice dataset).
@@ -282,6 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
     tga.add_argument("--epochs", type=int, default=30)
     tga.add_argument("--lr", type=float, default=1e-3)
     tga.add_argument("--init-checkpoint", default=None)
+    tga.add_argument("--val-dataset-json", default=None)
+    tga.add_argument("--early-stop-patience", type=int, default=0)
     tga.set_defaults(func=cmd_train_gcn_stage_a)
 
     # Train Stage B only (Vietnamese invoice dataset), starting from Stage A checkpoint.
@@ -291,6 +301,8 @@ def build_parser() -> argparse.ArgumentParser:
     tgb.add_argument("--checkpoint", default="outputs/checkpoints/gcn_stage_b.pt")
     tgb.add_argument("--epochs", type=int, default=20)
     tgb.add_argument("--lr", type=float, default=5e-4)
+    tgb.add_argument("--val-dataset-json", default=None)
+    tgb.add_argument("--early-stop-patience", type=int, default=0)
     tgb.set_defaults(func=cmd_train_gcn_stage_b)
 
     to = sub.add_parser("train_ocr")

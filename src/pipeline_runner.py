@@ -160,6 +160,7 @@ def cmd_convert_hf_to_gcn_csv(args: argparse.Namespace) -> None:
         score_field=args.score_field,
         label_map=label_map,
         limit=args.limit,
+        streaming=args.streaming,
     )
     logger.info("HF generic -> GCN CSV done: {}", out)
 
@@ -340,6 +341,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON string or path to JSON file, e.g. '{\"0\":\"OTHER\",\"1\":\"DATE\"}'",
     )
     hg.add_argument("--limit", type=int, default=None)
+    hg.add_argument(
+        "--streaming",
+        type=int,
+        default=1,
+        help="1=streaming mode (low RAM, recommended), 0=normal mode",
+    )
     hg.set_defaults(func=cmd_convert_hf_to_gcn_csv)
 
     # Single command for full training flow (A -> B -> eval).

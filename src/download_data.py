@@ -18,6 +18,7 @@ def main() -> None:
     parser.add_argument("--score-field", default=None)
     parser.add_argument("--label-map", default=None, help="JSON string or path to JSON file")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--streaming", type=int, default=1, help="1=low RAM mode, 0=normal mode")
     args = parser.parse_args()
 
     project_dir = Path(__file__).resolve().parent
@@ -49,6 +50,7 @@ def main() -> None:
         cmd.extend(["--label-map", args.label_map])
     if args.limit is not None:
         cmd.extend(["--limit", str(args.limit)])
+    cmd.extend(["--streaming", str(args.streaming)])
 
     subprocess.run(cmd, check=True, cwd=project_dir)
 

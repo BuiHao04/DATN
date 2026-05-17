@@ -27,13 +27,14 @@ class HFGenericToGcnCsvService:
         score_field: str | None = None,
         label_map: dict[str, str] | None = None,
         limit: int | None = None,
+        streaming: bool = True,
     ) -> str:
         try:
             from datasets import load_dataset
         except Exception as exc:
             raise RuntimeError("Missing dependency 'datasets'. Install with: pip install datasets") from exc
 
-        ds = load_dataset(dataset_id, split=split)
+        ds = load_dataset(dataset_id, split=split, streaming=streaming)
         rows: list[dict[str, str]] = []
 
         for idx, sample in enumerate(ds):
@@ -82,7 +83,12 @@ class HFGenericToGcnCsvService:
             writer.writeheader()
             writer.writerows(rows)
 
-        logger.info("Saved generic HF -> GCN CSV: {} (rows={})", out, len(rows))
+        logger.info(
+            "Saved generic HF -> GCN CSV: {} (rows={}, streaming={})",
+            out,
+            len(rows),
+            streaming,
+        )
         return str(out)
 
     def _build_doc_id(self, sample: dict[str, Any], doc_id_field: str, idx: int) -> str:

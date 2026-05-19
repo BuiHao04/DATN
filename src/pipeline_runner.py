@@ -172,6 +172,20 @@ def cmd_convert_hf_to_gcn_csv(args: argparse.Namespace) -> None:
     logger.info("HF generic -> GCN CSV done: {}", out)
 
 
+def cmd_prepare_ocr_labeling(args: argparse.Namespace) -> None:
+    from pipeline.services.ocr_labeling_prep_service import OCRLabelingPrepService
+
+    service = OCRLabelingPrepService()
+    out = service.prepare(
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        lang=args.lang,
+        save_debug_images=bool(args.save_debug_images),
+        copy_images=bool(args.copy_images),
+    )
+    logger.info("OCR labeling prep done: {}", out)
+
+
 def cmd_train_gcn_full(args: argparse.Namespace) -> None:
     """One-command training flow:
     optional preprocess -> stage A train -> stage B train -> optional eval.
@@ -362,6 +376,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="1=streaming mode (low RAM, recommended), 0=normal mode",
     )
     hg.set_defaults(func=cmd_convert_hf_to_gcn_csv)
+
+    po = sub.add_parser("prepare_ocr_labeling")
+    po.add_argument("--input-dir", required=True, help="Folder containing raw invoice images")
+    po.add_argument("--output-dir", default="data/labeling_stage_b")
+    po.add_argument("--lang", default="en")
+    po.add_argument("--save-debug-images", type=int, default=1)
+    po.add_argument("--copy-images", type=int, default=1)
+    po.set_defaults(func=cmd_prepare_ocr_labeling)
 
     # Single command for full training flow (A -> B -> eval).
     tf = sub.add_parser("train_gcn_full")

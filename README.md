@@ -92,6 +92,21 @@ Neu can map nhan:
 python .\download_data.py --dataset-id your_org/your_dataset --label-map .\data\label_map.json
 ```
 
+### 6) `prepare_ocr_labeling` (tao du lieu de gan nhan Stage B)
+Dat anh hoa don tho vao:
+- `src/data/stage_b_raw_images/`
+
+Chay OCR hang loat va tao file gan nhan:
+
+```powershell
+python .\pipeline_runner.py prepare_ocr_labeling --input-dir .\data\stage_b_raw_images --output-dir .\data\labeling_stage_b --lang en
+```
+
+Output de gan nhan:
+- `data/labeling_stage_b/nodes_to_label.csv` (ban dien cot `label`)
+- `data/labeling_stage_b/ocr_json/*.json` (chi tiet OCR moi anh)
+- `data/labeling_stage_b/debug_boxes/*.jpg` (anh ve bbox de kiem tra)
+
 ## Cach chay
 
 ### Cach chay nhanh

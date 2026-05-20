@@ -171,6 +171,38 @@ python .\pipeline_runner.py train_gcn_stage_a --dataset-json .\data\stage_a_data
 python .\pipeline_runner.py train_gcn_stage_b --dataset-json .\data\stage_b_vi_dataset.json --base-checkpoint outputs/checkpoints/gcn_stage_a.pt --checkpoint outputs/checkpoints/gcn_stage_b.pt --epochs 20 --lr 5e-4
 ```
 
+### 3.1) Download data de train Stage A (CORD -> preprocess -> train)
+
+Windows PowerShell:
+
+```powershell
+cd <project_dir>\src
+
+# 1) Download CORD split train -> CSV node-level
+python .\download_cord_data.py --dataset-id naver-clova-ix/cord-v2 --split train
+
+# 2) CSV -> JSON cho GCN Stage A
+python .\pipeline_runner.py preprocess_gcn_dataset --input-csv .\data\cord_train_nodes.csv --output-json .\data\stage_a_dataset.json
+
+# 3) Train Stage A
+python .\pipeline_runner.py train_gcn_stage_a --dataset-json .\data\stage_a_dataset.json --checkpoint .\outputs\checkpoints\gcn_stage_a.pt --epochs 30 --lr 1e-3
+```
+
+Linux/WSL:
+
+```bash
+cd /path/to/DATN/src
+
+# 1) Download CORD split train -> CSV node-level
+python download_cord_data.py --dataset-id naver-clova-ix/cord-v2 --split train
+
+# 2) CSV -> JSON cho GCN Stage A
+python pipeline_runner.py preprocess_gcn_dataset --input-csv ./data/cord_train_nodes.csv --output-json ./data/stage_a_dataset.json
+
+# 3) Train Stage A
+python pipeline_runner.py train_gcn_stage_a --dataset-json ./data/stage_a_dataset.json --checkpoint ./outputs/checkpoints/gcn_stage_a.pt --epochs 30 --lr 1e-3
+```
+
 ### 4) Evaluate
 
 ```powershell

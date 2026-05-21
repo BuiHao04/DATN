@@ -14,7 +14,7 @@ def cmd_gcn_infer(args: argparse.Namespace) -> None:
     nodes = ocr_service.run(args.image, lang=args.lang)
     ocr_service.save_debug_image(args.image, nodes, args.ocr_debug_image)
 
-    result = gcn_service.infer(nodes)
+    result = gcn_service.infer(nodes, checkpoint_path=args.checkpoint)
     gcn_service.save_result(result, args.output_json)
 
     logger.info("Saved GCN infer JSON: {}", args.output_json)
@@ -270,6 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
     gcn = sub.add_parser("gcn_infer")
     gcn.add_argument("--image", required=True)
     gcn.add_argument("--lang", default="en")
+    gcn.add_argument("--checkpoint", default=None, help="Trained GCN checkpoint (.pt). If omitted, use rule-based fallback.")
     gcn.add_argument("--ocr-debug-image", default="outputs/ocr_boxes.jpg")
     gcn.add_argument("--output-json", default="outputs/ocr_result.json")
     gcn.set_defaults(func=cmd_gcn_infer)

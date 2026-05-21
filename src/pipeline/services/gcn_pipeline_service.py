@@ -4,17 +4,62 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pipeline.core.gcn_classifier import build_features, classify_nodes
+import torch
+
+from pipeline.core.gcn_classifier import InvoiceGCN, build_edge_index, build_features, classify_nodes
 from pipeline.core.graph_builder import build_graph_edges
 from pipeline.core.postprocess import build_invoice_json
 from pipeline.core.schema import OCRNode
 
 
 class GCNPipelineService:
-    def infer(self, nodes: list[OCRNode]) -> dict[str, Any]:
+    def _infer_shape_from_checkpoint(self, checkpoint_path: str) -> tuple[int, int]:
+        state = torch.load(checkpoint_path, map_location="cpu")
+
+        in_channels = None
+        out_channels = None
+        for key, tensor in state.items():
+            if key.endswith("conv1.lin.weight"):
+                in_channels = int(tensor.shape[1])
+            if key.endswith("conv2.bias"):
+                out_channels = int(tensor.shape[0])
+            elif key.endswith("conv2.lin.weight"):
+                out_channels = int(tensor.shape[0])
+
+        if in_channels is None or out_channels is None:
+            raise RuntimeError(f"Cannot infer model shape from checkpoint: {checkpoint_path}")
+        return in_channels, out_channels
+
+    def _classify_nodes_with_checkpoint(
+        self,
+        nodes: list[OCRNode],
+        edges: list[tuple[int, int, float]],
+        checkpoint_path: str,
+    ) -> list[int]:
+        if not nodes:
+            return []
+
+        in_channels, out_channels = self._infer_shape_from_checkpoint(checkpoint_path)
+        model = InvoiceGCN(in_channels=in_channels, hidden_channels=64, out_channels=out_channels)
+        model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
+        model.eval()
+
+        x = build_features(nodes)
+        edge_index = build_edge_index(edges)
+        with torch.no_grad():
+            logits = model(x, edge_index)
+            pred = torch.argmax(logits, dim=1)
+        return [int(v) for v in pred.tolist()]
+
+    def infer(self, nodes: list[OCRNode], checkpoint_path: str | None = None) -> dict[str, Any]:
         edges = build_graph_edges(nodes)
         x = build_features(nodes)
-        labels = classify_nodes(nodes, edges)
+        if checkpoint_path:
+            labels = self._classify_nodes_with_checkpoint(nodes, edges, checkpoint_path)
+            classifier_mode = "trained_gcn_checkpoint"
+        else:
+            labels = classify_nodes(nodes, edges)
+            classifier_mode = "rule_based_fallback"
         extracted = build_invoice_json(nodes, labels)
 
         node_features = []
@@ -43,6 +88,8 @@ class GCNPipelineService:
 
         return {
             "flow": "ocr -> graph -> node_features -> node_classification -> invoice_json",
+            "classifier_mode": classifier_mode,
+            "checkpoint_path": checkpoint_path,
             "graph": graph_info,
             "node_features": node_features,
             **extracted,

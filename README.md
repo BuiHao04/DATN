@@ -193,14 +193,21 @@ Linux/WSL:
 ```bash
 cd /path/to/DATN/src
 
-# 1) Download CORD split train -> CSV node-level
-python download_cord_data.py --dataset-id naver-clova-ix/cord-v2 --split train
+# 1) Download du lieu CORD cho train / validation / test
+python .\download_data.py --dataset-id naver-clova-ix/cord-v2 --split train
+python .\download_data.py --dataset-id naver-clova-ix/cord-v2 --split validation
+python .\download_data.py --dataset-id naver-clova-ix/cord-v2 --split test
 
 # 2) CSV -> JSON cho GCN Stage A
-python pipeline_runner.py preprocess_gcn_dataset --input-csv ./data/cord_train_nodes.csv --output-json ./data/stage_a_dataset.json
+python .\pipeline_runner.py preprocess_gcn_dataset --input-csv .\data\train_nodes.csv --output-json .\data\stage_a_train.json
+python .\pipeline_runner.py preprocess_gcn_dataset --input-csv .\data\validation_nodes.csv --output-json .\data\stage_a_val.json
+python .\pipeline_runner.py preprocess_gcn_dataset --input-csv .\data\test_nodes.csv --output-json .\data\stage_a_test.json
 
-# 3) Train Stage A
-python pipeline_runner.py train_gcn_stage_a --dataset-json ./data/stage_a_dataset.json --checkpoint ./outputs/checkpoints/gcn_stage_a.pt --epochs 30 --lr 1e-3
+# 3) Train Stage A voi validation
+python .\pipeline_runner.py train_gcn_stage_a --dataset-json .\data\stage_a_train.json --val-dataset-json .\data\stage_a_val.json --checkpoint .\outputs\checkpoints\gcn_stage_a.pt --epochs 30 --lr 1e-3 --early-stop-patience 5
+
+# 4) Test checkpoint tren tap test
+python .\pipeline_runner.py test_gcn --dataset-json .\data\stage_a_test.json --checkpoint .\outputs\checkpoints\gcn_stage_a.pt --output-eval .\outputs\gcn_stage_a_test_report.json
 ```
 
 ### 4) Evaluate

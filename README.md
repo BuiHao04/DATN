@@ -210,6 +210,30 @@ python .\pipeline_runner.py train_gcn_stage_a --dataset-json .\data\stage_a_trai
 python .\pipeline_runner.py test_gcn --dataset-json .\data\stage_a_test.json --checkpoint .\outputs\checkpoints\gcn_stage_a.pt --output-eval .\outputs\gcn_stage_a_test_report.json
 ```
 
+### 3.2) Chay checkpoint Stage A vua train (tap test + 1 anh rieng)
+
+```bash
+cd /path/to/DATN/src
+
+# 1) Danh gia tren tap test (co ground-truth)
+python pipeline_runner.py test_gcn \
+  --dataset-json ./data/stage_a_test.json \
+  --checkpoint ./outputs/checkpoints/gcn_stage_a.pt \
+  --output-eval ./outputs/gcn_stage_a_test_report.json
+
+# 2) Infer tren 1 anh rieng bang dung model Stage A da train
+python pipeline_runner.py gcn_infer \
+  --image ./data/test_1.jpg \
+  --lang vi \
+  --checkpoint ./outputs/checkpoints/gcn_stage_a.pt \
+  --ocr-debug-image ./outputs/ocr_boxes_test_1.jpg \
+  --output-json ./outputs/gcn_infer_stage_a_test_1.json
+```
+
+Khi infer bang checkpoint, file output se co:
+- `classifier_mode: "trained_gcn_checkpoint"`
+- `checkpoint_path: "<duong_dan_checkpoint>"`
+
 ### 4) Evaluate
 
 ```powershell

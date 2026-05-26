@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .drag-over {
+            border-color: #24389c !important;
+            background-color: rgba(63, 81, 181, 0.05) !important;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary-container": "#54647a",
+                        "background": "#fbf8ff",
+                        "on-error-container": "#93000a",
+                        "surface-variant": "#e3e1ea",
+                        "on-tertiary-fixed-variant": "#713700",
+                        "primary-fixed-dim": "#bac3ff",
+                        "on-secondary-fixed": "#0b1c30",
+                        "on-secondary": "#ffffff",
+                        "outline": "#757684",
+                        "surface-container-highest": "#e3e1ea",
+                        "surface-container-high": "#e9e7f0",
+                        "on-error": "#ffffff",
+                        "tertiary-container": "#8f4700",
+                        "primary-fixed": "#dee0ff",
+                        "on-surface-variant": "#454652",
+                        "error-container": "#ffdad6",
+                        "surface": "#fbf8ff",
+                        "on-tertiary-container": "#ffc7a2",
+                        "surface-container-low": "#f4f2fc",
+                        "secondary-fixed": "#d3e4fe",
+                        "primary": "#24389c",
+                        "outline-variant": "#c5c5d4",
+                        "secondary-container": "#d0e1fb",
+                        "tertiary-fixed": "#ffdcc6",
+                        "on-primary": "#ffffff",
+                        "surface-container": "#efedf6",
+                        "surface-dim": "#dbd9e2",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-container": "#cacfff",
+                        "surface-tint": "#4355b9",
+                        "tertiary": "#6c3400",
+                        "on-secondary-fixed-variant": "#38485d",
+                        "on-primary-fixed": "#00105c",
+                        "inverse-on-surface": "#f2eff9",
+                        "secondary": "#505f76",
+                        "tertiary-fixed-dim": "#ffb784",
+                        "on-primary-fixed-variant": "#293ca0",
+                        "on-surface": "#1a1b22",
+                        "surface-bright": "#fbf8ff",
+                        "primary-container": "#3f51b5",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#301400",
+                        "on-background": "#1a1b22",
+                        "inverse-primary": "#bac3ff",
+                        "inverse-surface": "#2f3037",
+                        "secondary-fixed-dim": "#b7c8e1"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "container-gap": "1.5rem",
+                        "sidebar-width": "260px",
+                        "table-cell-padding": "0.75rem 1rem",
+                        "stack-gap-sm": "0.5rem",
+                        "stack-gap-md": "1rem"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "mono-data": ["JetBrains Mono"],
+                        "title-sm": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "body-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                        "mono-data": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "title-sm": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "display-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}]
+                    }
+                },
+            },
+        }
+    </script>
+</head>
+<body class="bg-background text-on-background font-body-md overflow-hidden">
+<!-- SIDEBAR -->
+<aside class="fixed left-0 top-0 h-screen w-[260px] bg-surface dark:bg-inverse-surface border-r border-outline-variant dark:border-outline flex flex-col py-6 transition-all duration-200 ease-in-out">
+<div class="px-6 mb-8">
+<h1 class="font-headline-md text-headline-md font-bold text-primary dark:text-inverse-primary">ML Pipeline</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant/70">v2.4.0-stable</p>
+</div>
+<nav class="flex-1 overflow-y-auto space-y-1">
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="dashboard">dashboard</span>
+<span class="font-body-md text-body-md">Dashboard</span>
+</a>
+<a class="flex items-center px-6 py-3 border-l-4 border-primary text-primary font-bold bg-primary-container/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="input">input</span>
+<span class="font-body-md text-body-md">Data Ingestion</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="visibility">visibility</span>
+<span class="font-body-md text-body-md">OCR Preview</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="edit_note">edit_note</span>
+<span class="font-body-md text-body-md">Labeling Workspace</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="storage">storage</span>
+<span class="font-body-md text-body-md">Dataset Builder</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="model_training">model_training</span>
+<span class="font-body-md text-body-md">Training Center</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="analytics">analytics</span>
+<span class="font-body-md text-body-md">Evaluation</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="history">history</span>
+<span class="font-body-md text-body-md">Run History</span>
+</a>
+</nav>
+<div class="mt-auto px-2 space-y-1">
+<a class="flex items-center px-4 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="settings">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</a>
+<a class="flex items-center px-4 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10 transition-all" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="description">description</span>
+<span class="font-body-md text-body-md">Documentation</span>
+</a>
+<div class="pt-4 px-4 flex items-center gap-3 border-t border-outline-variant mt-2">
+<div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-on-secondary-container">
+<span class="material-symbols-outlined text-[18px]" data-icon="person">person</span>
+</div>
+<div class="overflow-hidden">
+<p class="text-body-sm font-bold truncate">ML Engineer</p>
+<p class="text-[10px] text-on-surface-variant truncate">engineer@pipeline.ai</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- MAIN CONTENT -->
+<main class="ml-[260px] h-screen overflow-y-auto">
+<!-- TOP APP BAR -->
+<header class="h-16 bg-surface dark:bg-surface-dim border-b border-outline-variant dark:border-outline flex justify-between items-center px-6 sticky top-0 z-10 shadow-sm">
+<div class="flex items-center gap-4 flex-1">
+<div class="relative w-full max-w-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" data-icon="search">search</span>
+<input class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg pl-10 pr-4 py-1.5 focus:outline-none focus:border-primary text-body-md" placeholder="Search ingested data..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-low transition-all rounded-full cursor-pointer">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-low transition-all rounded-full cursor-pointer">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+</button>
+</div>
+</header>
+<div class="p-6 space-y-6">
+<!-- PAGE HEADER -->
+<div class="flex justify-between items-end">
+<div>
+<h2 class="font-display-lg text-display-lg text-on-surface">Data Ingestion</h2>
+<p class="text-on-surface-variant mt-1">Upload and manage source documents for OCR processing.</p>
+</div>
+<button class="bg-primary text-on-primary px-5 py-2.5 rounded-lg flex items-center gap-2 font-bold shadow-md hover:opacity-90 active:scale-95 transition-all">
+<span class="material-symbols-outlined" data-icon="play_circle">play_circle</span>
+                    Run OCR Batch
+                </button>
+</div>
+<!-- UPLOAD ZONE -->
+<div class="relative group border-2 border-dashed border-outline-variant bg-surface rounded-xl p-12 transition-all duration-300 hover:border-primary/50 hover:bg-primary-container/5 cursor-pointer" id="dropZone">
+<input class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" id="fileInput" multiple="" type="file"/>
+<div class="flex flex-col items-center justify-center text-center">
+<div class="w-16 h-16 bg-primary-container/10 rounded-full flex items-center justify-center text-primary mb-4 group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-[40px]" data-icon="upload_file">upload_file</span>
+</div>
+<h3 class="font-title-sm text-title-sm text-on-surface">Drag and drop images here</h3>
+<p class="text-on-surface-variant mt-2 max-w-sm">Support for PNG, JPEG, and TIFF files. Max batch size: 500 images or 2GB.</p>
+<div class="mt-6 flex gap-3">
+<span class="px-3 py-1 bg-surface-container-high rounded text-label-caps uppercase text-on-surface-variant">PNG</span>
+<span class="px-3 py-1 bg-surface-container-high rounded text-label-caps uppercase text-on-surface-variant">JPG</span>
+<span class="px-3 py-1 bg-surface-container-high rounded text-label-caps uppercase text-on-surface-variant">TIFF</span>
+</div>
+</div>
+</div>
+<!-- TABLE SECTION -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
+<div class="px-6 py-4 border-b border-outline-variant flex justify-between items-center bg-surface-bright">
+<h3 class="font-title-sm text-title-sm text-on-surface">Image Queue</h3>
+<div class="flex items-center gap-2">
+<span class="text-body-sm text-on-surface-variant">Filter by status:</span>
+<select class="bg-transparent border-none text-body-sm font-bold text-primary focus:ring-0 cursor-pointer">
+<option>All Assets</option>
+<option>Processed</option>
+<option>Pending</option>
+<option>Failed</option>
+</select>
+</div>
+</div>
+<div class="overflow-x-auto" id="tableContainer">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low/50">
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">Thumbnail</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">Filename</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">Size</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">Upload Date</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">Status</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant">
+<!-- Row 1 -->
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="p-4">
+<div class="w-12 h-12 rounded border border-outline-variant overflow-hidden bg-on-surface-variant/5">
+<img class="w-full h-full object-cover" data-alt="A high-resolution, close-up photograph of a scan of a complex technical blueprint with fine lines and architectural notations. The image is clean and bright, showing detailed schematic textures on a crisp white paper background. The lighting is perfectly even, mimicking a professional document scanner result in a modern office environment. Deep blue lines provide contrast against the neutral paper." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDWhKTHhqRkf-FA88ugdSq_piadWQAYu56uaedYyIUkcXnr-XiLnZ7oSBB_8MQYdz6SArQcLTl3iicMoj5lreKFLNIDVLZu2tNqSD2lw62knlu0ZQgju3nJhtbNn1lZY3VIf2k1JKuPu24EPFednZaXWVUTeQTyuX5G_KHp_VfBpn5k-O7DeFlPn8LQfz38qlCfMuG68eC9Kxyfw9vZF-1h5u51xLIrjci120781YrPehcsGbUGHsUTVb9a3fPqrwR3fHtOJrOfCg"/>
+</div>
+</td>
+<td class="p-4 font-mono-data text-mono-data font-medium">invoice_8829_scan.png</td>
+<td class="p-4 text-body-sm text-on-surface-variant">2.4 MB</td>
+<td class="p-4 text-body-sm text-on-surface-variant">Oct 24, 2023 14:20</td>
+<td class="p-4">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-800">
+<span class="material-symbols-outlined text-[14px]" data-icon="check_circle" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                                        Processed
+                                    </span>
+</td>
+<td class="p-4 text-right">
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="p-4">
+<div class="w-12 h-12 rounded border border-outline-variant overflow-hidden bg-on-surface-variant/5">
+<img class="w-full h-full object-cover" data-alt="A high-contrast macro photograph of a dense shipping label featuring multiple barcodes and numerical codes. The surface of the label is slightly textured with a subtle sheen, illuminated by cool-toned studio lighting that highlights the precision of the printed elements. The overall aesthetic is industrial yet extremely clean, part of a high-tech logistics processing system. The colors are strictly monochromatic with varying shades of gray." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCosUGa4SLz_HJliM9MEC0J6GbPM3JMfBZc06CcHfHmT325U7uujp_P8QF5EAEwiVjd6DvMGcAtGkZfAftmCzAZ6bV9EQDO91HhfeQSXDxW98h1G_2s-v0MK7ncIVjYAMerd4em8gVfRshxiUXa462ZQkj0MS4K9q2e8gWyXmXO6Z2nuNSwkoOcXMytGcvSxoC4s9XnyFp-oTnUmbQ1lgZn_8bE5V-sVj3w5Bh90dwRY1xb95ewPg6xjFpvC9ZWyre3IPQyNEhMYQ"/>
+</div>
+</td>
+<td class="p-4 font-mono-data text-mono-data font-medium">shipping_manifest_v2.jpg</td>
+<td class="p-4 text-body-sm text-on-surface-variant">4.1 MB</td>
+<td class="p-4 text-body-sm text-on-surface-variant">Oct 24, 2023 15:05</td>
+<td class="p-4">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+<span class="material-symbols-outlined text-[14px]" data-icon="schedule" style="font-variation-settings: 'FILL' 1;">schedule</span>
+                                        Pending
+                                    </span>
+</td>
+<td class="p-4 text-right">
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="p-4">
+<div class="w-12 h-12 rounded border border-outline-variant overflow-hidden bg-on-surface-variant/5">
+<img class="w-full h-full object-cover" data-alt="A detailed digital rendering of a crumbled and slightly torn historical document with faded ink signatures and elegant cursive handwriting. The paper has a warm, parchment-like texture with visible fibers and yellowing edges. The lighting is soft and directional, creating gentle shadows in the folds of the paper. This image represents a challenging document for OCR processing, presented in a clean, museum-quality archival style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDwBJ2tXHnqckLV3q259cqsKRxypwtX2EO9xC9w1i1GC47F24uZ9lghOqbnwf8BraubenpvvP58BqkiAFRK9cqAbVV-H5PPwTPX6s0xGW5W7lJZMSCLUq2IsVC_uFCQGsUAoEE75odyVWgFSjOL5gQPAOB0vBJrhySJBBScxShQNiEgRsl6ys7Y5gPSRSFSerlE1My9My0NKL1Oh8poJf4NH8V2ePHiUo9CTB8DFWq1nJADKm3uRyqhgbjYKMeqg32f7xc9ntbkgQ"/>
+</div>
+</td>
+<td class="p-4 font-mono-data text-mono-data font-medium">handwritten_memo_01.png</td>
+<td class="p-4 text-body-sm text-on-surface-variant">1.8 MB</td>
+<td class="p-4 text-body-sm text-on-surface-variant">Oct 24, 2023 15:12</td>
+<td class="p-4">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
+<span class="material-symbols-outlined text-[14px]" data-icon="error" style="font-variation-settings: 'FILL' 1;">error</span>
+                                        Failed
+                                    </span>
+</td>
+<td class="p-4 text-right">
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- EMPTY STATE (HIDDEN BY DEFAULT) -->
+<div class="hidden py-24 flex flex-col items-center justify-center text-center" id="emptyState">
+<div class="w-20 h-20 bg-surface-container-high rounded-full flex items-center justify-center text-outline-variant mb-4">
+<span class="material-symbols-outlined text-[48px]" data-icon="inbox">inbox</span>
+</div>
+<h3 class="font-title-sm text-title-sm text-on-surface">No images uploaded yet</h3>
+<p class="text-on-surface-variant mt-2 max-w-xs">Start by dragging files into the upload area above to populate your ingestion queue.</p>
+</div>
+<!-- PAGINATION -->
+<div class="px-6 py-4 border-t border-outline-variant flex items-center justify-between bg-surface-bright">
+<p class="text-body-sm text-on-surface-variant">Showing <span class="font-bold text-on-surface">1 - 3</span> of <span class="font-bold text-on-surface">42</span> images</p>
+<div class="flex items-center gap-1">
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-low transition-colors disabled:opacity-30" disabled="">
+<span class="material-symbols-outlined text-[18px]" data-icon="chevron_left">chevron_left</span>
+</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-primary bg-primary-container/10 text-primary font-bold text-body-sm">1</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-low transition-colors text-body-sm">2</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-low transition-colors text-body-sm">3</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined text-[18px]" data-icon="chevron_right">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+<script>
+        // Micro-interactions for Drag and Drop
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, false);
+        });
+
+        dropZone.addEventListener('dragenter', () => dropZone.classList.add('drag-over'));
+        dropZone.addEventListener('dragover', () => dropZone.classList.add('drag-over'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+        dropZone.addEventListener('drop', (e) => {
+            dropZone.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            console.log('Files dropped:', files);
+            // In a real app, logic to handle files would go here
+        });
+
+        // Simple visibility toggle for demo purposes
+        function toggleEmptyState(isEmpty) {
+            const table = document.getElementById('tableContainer');
+            const empty = document.getElementById('emptyState');
+            if (isEmpty) {
+                table.classList.add('hidden');
+                empty.classList.remove('hidden');
+            } else {
+                table.classList.remove('hidden');
+                empty.classList.add('hidden');
+            }
+        }
+    </script>
+</body></html>

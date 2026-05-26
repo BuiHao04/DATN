@@ -22,6 +22,20 @@ cd <project_dir>\src
 pip install -r requirements.txt
 ```
 
+## Chay full app (Frontend + Backend API)
+
+```bash
+cd <project_dir>
+pip install -r app/requirements-web.txt
+cd src && pip install -r requirements.txt && cd ..
+./app/run_full_app.sh
+```
+
+Mo trinh duyet:
+
+- `http://localhost:8080/` (dashboard)
+- API health: `http://localhost:8080/api/health`
+
 ## Cau hinh `.env`
 
 Tao file `.env` trong `src`:

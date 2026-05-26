@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Training Center | OCR &amp; GCN Pipeline</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary-container": "#54647a",
+                        "background": "#fbf8ff",
+                        "on-error-container": "#93000a",
+                        "surface-variant": "#e3e1ea",
+                        "on-tertiary-fixed-variant": "#713700",
+                        "primary-fixed-dim": "#bac3ff",
+                        "on-secondary-fixed": "#0b1c30",
+                        "on-secondary": "#ffffff",
+                        "outline": "#757684",
+                        "surface-container-highest": "#e3e1ea",
+                        "surface-container-high": "#e9e7f0",
+                        "on-error": "#ffffff",
+                        "tertiary-container": "#8f4700",
+                        "primary-fixed": "#dee0ff",
+                        "on-surface-variant": "#454652",
+                        "error-container": "#ffdad6",
+                        "surface": "#fbf8ff",
+                        "on-tertiary-container": "#ffc7a2",
+                        "surface-container-low": "#f4f2fc",
+                        "secondary-fixed": "#d3e4fe",
+                        "primary": "#24389c",
+                        "outline-variant": "#c5c5d4",
+                        "secondary-container": "#d0e1fb",
+                        "tertiary-fixed": "#ffdcc6",
+                        "on-primary": "#ffffff",
+                        "surface-container": "#efedf6",
+                        "surface-dim": "#dbd9e2",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-container": "#cacfff",
+                        "surface-tint": "#4355b9",
+                        "tertiary": "#6c3400",
+                        "on-secondary-fixed-variant": "#38485d",
+                        "on-primary-fixed": "#00105c",
+                        "inverse-on-surface": "#f2eff9",
+                        "secondary": "#505f76",
+                        "tertiary-fixed-dim": "#ffb784",
+                        "on-primary-fixed-variant": "#293ca0",
+                        "on-surface": "#1a1b22",
+                        "surface-bright": "#fbf8ff",
+                        "primary-container": "#3f51b5",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#301400",
+                        "on-background": "#1a1b22",
+                        "inverse-primary": "#bac3ff",
+                        "inverse-surface": "#2f3037",
+                        "secondary-fixed-dim": "#b7c8e1"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "container-gap": "1.5rem",
+                        "sidebar-width": "260px",
+                        "table-cell-padding": "0.75rem 1rem",
+                        "stack-gap-sm": "0.5rem",
+                        "stack-gap-md": "1rem"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "mono-data": ["JetBrains Mono"],
+                        "title-sm": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "body-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                        "mono-data": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "title-sm": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "display-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #c5c5d4; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #757684; }
+        .terminal-glow { box-shadow: inset 0 0 20px rgba(0,0,0,0.4); }
+        .training-active-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    </style>
+</head>
+<body class="bg-background font-body-md text-on-background antialiased overflow-hidden">
+<!-- Side Navigation Shell -->
+<aside class="fixed left-0 top-0 h-screen w-[260px] bg-surface dark:bg-inverse-surface border-r border-outline-variant dark:border-outline flex flex-col py-6 z-50">
+<div class="px-6 mb-8">
+<h1 class="font-headline-md text-headline-md font-bold text-primary dark:text-inverse-primary">ML Pipeline</h1>
+<p class="text-on-surface-variant font-body-sm opacity-70">v2.4.0-stable</p>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="dashboard">dashboard</span>
+<span class="font-body-md">Dashboard</span>
+</a>
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="input">input</span>
+<span class="font-body-md">Data Ingestion</span>
+</a>
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="visibility">visibility</span>
+<span class="font-body-md">OCR Preview</span>
+</a>
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="edit_note">edit_note</span>
+<span class="font-body-md">Labeling Workspace</span>
+</a>
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="storage">storage</span>
+<span class="font-body-md">Dataset Builder</span>
+</a>
+<!-- Active Tab: Training Center -->
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out border-l-4 border-primary text-primary font-bold bg-primary-container/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="model_training">model_training</span>
+<span class="font-body-md">Training Center</span>
+</a>
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="analytics">analytics</span>
+<span class="font-body-md">Evaluation</span>
+</a>
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="history">history</span>
+<span class="font-body-md">Run History</span>
+</a>
+</nav>
+<div class="mt-auto pt-6 border-t border-outline-variant/30 space-y-1">
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="settings">settings</span>
+<span class="font-body-md">Settings</span>
+</a>
+<a class="flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-on-surface-variant dark:text-surface-variant hover:text-on-surface hover:bg-surface-container-high dark:hover:bg-on-surface-variant/10" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="description">description</span>
+<span class="font-body-md">Documentation</span>
+</a>
+<div class="px-6 mt-4 flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary-fixed overflow-hidden border border-primary/20">
+<img alt="ML Engineer Profile" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCnSqVf9hSBxETn9aRQoFnfOwzH-MXfvIaRux6_7yo3mzpA811eivDnBpSet-PkPPIoKh9q0oWwgcyXvsXN59GPzS1dk2jCf1DC6mAwagRbxkdklWEGKFUIVg8Zo4i8aBArXkwclyiEuq98DsqkQMGGVzN6-X2W3IDlbAFO5hJUG15KGXkmLPLCCY3eDho9V9UT6PWJVNFbnTa_2d7zbNaMrAsfNbgIGXer4LYXarGLauKmaLz00S-yEkwKT2H1D3hDgs_yR-8j2g"/>
+</div>
+<div class="flex-1 min-w-0">
+<p class="font-title-sm text-body-sm truncate font-bold">eng_ops_alpha</p>
+<p class="text-[10px] uppercase tracking-wider text-on-surface-variant font-bold">Admin Level</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- Top App Bar -->
+<header class="fixed top-0 right-0 w-[calc(100%-260px)] h-16 bg-surface dark:bg-surface-dim border-b border-outline-variant dark:border-outline flex justify-between items-center px-6 z-40 shadow-sm">
+<div class="flex items-center gap-4">
+<h2 class="font-headline-md text-headline-md font-extrabold text-on-surface">Training Center</h2>
+<span class="h-6 w-px bg-outline-variant"></span>
+<div class="flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded border border-outline-variant">
+<span class="material-symbols-outlined text-primary scale-75" data-icon="search">search</span>
+<input class="bg-transparent border-none text-body-sm focus:ring-0 w-64 placeholder:text-outline" placeholder="Search pipeline runs..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-low transition-colors cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-low transition-colors cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+</button>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="ml-[260px] pt-16 h-screen overflow-y-auto bg-background p-6">
+<div class="grid grid-cols-12 gap-6">
+<!-- Training Configuration Form -->
+<section class="col-span-12 lg:col-span-7 bg-surface-container-lowest border border-outline-variant rounded-xl p-6 shadow-sm">
+<div class="flex justify-between items-center mb-6">
+<h3 class="font-title-sm text-title-sm flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="tune">tune</span>
+                        Training Configuration
+                    </h3>
+<div class="px-3 py-1 rounded-full bg-secondary-container/30 text-secondary text-xs font-bold flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+                        READY
+                    </div>
+</div>
+<form class="space-y-6">
+<!-- Train Mode Selection -->
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant block mb-3">TRAIN MODE</label>
+<div class="flex flex-wrap gap-4">
+<label class="flex-1 min-w-[120px] relative cursor-pointer">
+<input checked="" class="peer sr-only" name="train_mode" type="radio" value="gcn_full"/>
+<div class="p-4 border border-outline-variant rounded-lg text-center peer-checked:border-primary peer-checked:bg-primary-container/10 transition-all hover:bg-surface-container-low">
+<span class="material-symbols-outlined block mb-1 text-on-surface-variant peer-checked:text-primary" data-icon="grid_view">grid_view</span>
+<p class="font-bold text-body-sm">GCN Full</p>
+</div>
+</label>
+<label class="flex-1 min-w-[120px] relative cursor-pointer">
+<input class="peer sr-only" name="train_mode" type="radio" value="stage_a"/>
+<div class="p-4 border border-outline-variant rounded-lg text-center peer-checked:border-primary peer-checked:bg-primary-container/10 transition-all hover:bg-surface-container-low">
+<span class="material-symbols-outlined block mb-1 text-on-surface-variant" data-icon="looks_one">looks_one</span>
+<p class="font-bold text-body-sm">Stage A</p>
+</div>
+</label>
+<label class="flex-1 min-w-[120px] relative cursor-pointer">
+<input class="peer sr-only" name="train_mode" type="radio" value="stage_b"/>
+<div class="p-4 border border-outline-variant rounded-lg text-center peer-checked:border-primary peer-checked:bg-primary-container/10 transition-all hover:bg-surface-container-low">
+<span class="material-symbols-outlined block mb-1 text-on-surface-variant" data-icon="looks_two">looks_two</span>
+<p class="font-bold text-body-sm">Stage B</p>
+</div>
+</label>
+</div>
+</div>
+<!-- Hyperparameters Grid -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant block mb-1">EPOCHS</label>
+<input class="w-full bg-surface-container-low border border-outline-variant rounded p-2 focus:border-primary focus:ring-2 focus:ring-primary/20 text-body-md font-mono-data" type="number" value="100"/>
+</div>
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant block mb-1">LEARNING RATE</label>
+<input class="w-full bg-surface-container-low border border-outline-variant rounded p-2 focus:border-primary focus:ring-2 focus:ring-primary/20 text-body-md font-mono-data" type="text" value="1e-4"/>
+</div>
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant block mb-1">BATCH SIZE</label>
+<input class="w-full bg-surface-container-low border border-outline-variant rounded p-2 focus:border-primary focus:ring-2 focus:ring-primary/20 text-body-md font-mono-data" type="number" value="32"/>
+</div>
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant block mb-1">PATIENCE</label>
+<input class="w-full bg-surface-container-low border border-outline-variant rounded p-2 focus:border-primary focus:ring-2 focus:ring-primary/20 text-body-md font-mono-data" type="number" value="10"/>
+</div>
+</div>
+<!-- Dataset Selection -->
+<div>
+<label class="font-label-caps text-label-caps text-on-surface-variant block mb-1">DATASET SELECTION</label>
+<select class="w-full bg-surface-container-low border border-outline-variant rounded p-2 focus:border-primary focus:ring-2 focus:ring-primary/20 text-body-md">
+<option>v4_production_ready_20231024.json</option>
+<option>v3_legacy_validation.json</option>
+<option>synthetic_augmentation_test.json</option>
+</select>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-4 pt-4">
+<button class="flex-1 bg-primary text-on-primary py-3 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-primary/90 transition-all active:scale-[0.98]" type="button">
+<span class="material-symbols-outlined" data-icon="play_arrow">play_arrow</span>
+                            Start Training
+                        </button>
+<button class="px-8 border border-error text-error py-3 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-error/5 transition-all" type="button">
+<span class="material-symbols-outlined" data-icon="stop">stop</span>
+                            Stop
+                        </button>
+</div>
+</form>
+</section>
+<!-- Artifacts / Model Info Card -->
+<section class="col-span-12 lg:col-span-5 flex flex-col gap-6">
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-6 shadow-sm flex-1">
+<h3 class="font-title-sm text-title-sm flex items-center gap-2 mb-4">
+<span class="material-symbols-outlined text-primary" data-icon="inventory_2">inventory_2</span>
+                        Training Artifacts
+                    </h3>
+<div class="space-y-4">
+<div class="p-4 bg-surface-container-low rounded-lg border-l-4 border-primary">
+<div class="flex justify-between items-start mb-2">
+<div>
+<p class="font-label-caps text-label-caps text-on-surface-variant">BEST CHECKPOINT</p>
+<p class="font-mono-data text-body-sm truncate w-64 mt-1">/models/gcn/exp_002/ckpt_best.pth</p>
+</div>
+<span class="material-symbols-outlined text-primary" data-icon="verified" style="font-variation-settings: 'FILL' 1;">verified</span>
+</div>
+<div class="flex items-center gap-4 mt-3">
+<div class="flex-1 bg-outline-variant h-1 rounded-full overflow-hidden">
+<div class="bg-primary w-full h-full"></div>
+</div>
+<span class="text-[10px] font-bold">128.4 MB</span>
+</div>
+<button class="w-full mt-4 flex items-center justify-center gap-2 bg-on-surface text-surface py-2 rounded font-bold text-body-sm hover:opacity-90">
+<span class="material-symbols-outlined text-sm" data-icon="download">download</span>
+                                Download Artifacts
+                            </button>
+</div>
+<div class="grid grid-cols-2 gap-3">
+<div class="p-3 bg-surface-container border border-outline-variant/30 rounded text-center">
+<p class="text-[10px] font-bold opacity-60">VAL LOSS</p>
+<p class="text-title-sm font-mono-data text-primary">0.0421</p>
+</div>
+<div class="p-3 bg-surface-container border border-outline-variant/30 rounded text-center">
+<p class="text-[10px] font-bold opacity-60">VAL ACC</p>
+<p class="text-title-sm font-mono-data text-secondary">98.24%</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Environment Monitor -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-4 shadow-sm">
+<div class="flex items-center justify-between mb-3">
+<p class="font-label-caps text-[10px] text-on-surface-variant">HW RESOURCES</p>
+<span class="text-[10px] font-bold text-secondary flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary training-active-pulse"></span>
+                            NVIDIA A100-SXM4
+                        </span>
+</div>
+<div class="flex gap-4">
+<div class="flex-1 space-y-1">
+<div class="flex justify-between text-[10px] font-bold"><p>GPU UTIL</p><p>74%</p></div>
+<div class="h-1 bg-surface-container-high rounded-full"><div class="bg-secondary h-full w-[74%]"></div></div>
+</div>
+<div class="flex-1 space-y-1">
+<div class="flex justify-between text-[10px] font-bold"><p>VRAM</p><p>12.2GB</p></div>
+<div class="h-1 bg-surface-container-high rounded-full"><div class="bg-primary h-full w-[45%]"></div></div>
+</div>
+</div>
+</div>
+</section>
+<!-- Real-time Monitor Section -->
+<section class="col-span-12 grid grid-cols-12 gap-6">
+<!-- Loss & Accuracy Chart -->
+<div class="col-span-12 xl:col-span-8 bg-surface-container-lowest border border-outline-variant rounded-xl p-6 shadow-sm">
+<div class="flex justify-between items-center mb-6">
+<h3 class="font-title-sm text-title-sm flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="show_chart">show_chart</span>
+                            Training Metrics
+                        </h3>
+<div class="flex items-center gap-4 text-xs font-bold">
+<div class="flex items-center gap-1.5"><span class="w-3 h-1 bg-primary rounded"></span> TRAIN</div>
+<div class="flex items-center gap-1.5"><span class="w-3 h-1 bg-secondary rounded"></span> VAL</div>
+</div>
+</div>
+<div class="relative h-64 w-full bg-surface-container-low rounded-lg overflow-hidden flex flex-col justify-end p-4 border border-outline-variant/50">
+<!-- Simulated Chart Grid & Lines -->
+<div class="absolute inset-0 flex flex-col justify-between p-4 pointer-events-none opacity-20">
+<div class="border-b border-on-surface w-full h-0"></div>
+<div class="border-b border-on-surface w-full h-0"></div>
+<div class="border-b border-on-surface w-full h-0"></div>
+<div class="border-b border-on-surface w-full h-0"></div>
+</div>
+<!-- Visualizing chart data with a styled SVG for precision -->
+<svg class="w-full h-full overflow-visible" preserveaspectratio="none" viewbox="0 0 100 100">
+<!-- Training Line (Blue) -->
+<path d="M 0 80 Q 25 75, 50 40 T 100 10" fill="none" stroke="#24389c" stroke-width="2"></path>
+<!-- Validation Line (Teal/Secondary) -->
+<path d="M 0 90 Q 20 85, 55 50 T 100 20" fill="none" stroke="#505f76" stroke-dasharray="4" stroke-width="2"></path>
+<!-- Current Point Marker -->
+<circle cx="100" cy="10" fill="#24389c" r="3"></circle>
+<circle cx="100" cy="20" fill="#505f76" r="3"></circle>
+</svg>
+<div class="mt-4 flex justify-between font-mono-data text-[10px] text-on-surface-variant">
+<span>EPOCH 0</span>
+<span>25</span>
+<span>50</span>
+<span>75</span>
+<span>EPOCH 100</span>
+</div>
+</div>
+</div>
+<!-- Terminal-style Log Viewer -->
+<div class="col-span-12 xl:col-span-4 bg-inverse-surface rounded-xl overflow-hidden flex flex-col shadow-xl">
+<div class="bg-[#1a1b22] px-4 py-3 flex items-center justify-between border-b border-outline/20">
+<div class="flex items-center gap-2">
+<span class="w-2.5 h-2.5 rounded-full bg-error"></span>
+<span class="w-2.5 h-2.5 rounded-full bg-tertiary-fixed-dim"></span>
+<span class="w-2.5 h-2.5 rounded-full bg-secondary-fixed"></span>
+<span class="ml-2 font-mono-data text-[11px] text-surface-variant">pipeline_logs.sh</span>
+</div>
+<span class="material-symbols-outlined text-surface-variant text-sm" data-icon="terminal">terminal</span>
+</div>
+<div class="flex-1 p-4 font-mono-data text-[12px] leading-relaxed overflow-y-auto max-h-64 terminal-glow text-[#d1d5db]">
+<p class="text-secondary-fixed mb-1">[2023-11-01 14:30:01] <span class="text-white">INFO: Initializing GCN Backbone...</span></p>
+<p class="text-secondary-fixed mb-1">[2023-11-01 14:30:05] <span class="text-white">INFO: Dataset loaded successfully (14,200 samples)</span></p>
+<p class="text-secondary-fixed mb-1">[2023-11-01 14:30:08] <span class="text-primary-fixed-dim">DEBUG: Starting Epoch 0...</span></p>
+<p class="mb-1 text-on-surface-variant">Epoch 0: 100%|██████████| 444/444 [01:22&lt;00:00, 5.38it/s, loss=0.512, acc=0.824]</p>
+<p class="text-primary-fixed-dim mb-1">[2023-11-01 14:31:30] <span class="text-white">INFO: Validation at Epoch 0: loss=0.488, acc=0.841</span></p>
+<p class="text-secondary-fixed mb-1">[2023-11-01 14:31:32] <span class="text-primary-fixed-dim">DEBUG: Starting Epoch 1...</span></p>
+<p class="mb-1 text-on-surface-variant">Epoch 1: 45%|█████     | 200/444 [00:38&lt;00:46, 5.24it/s, loss=0.321, acc=0.892]</p>
+<p class="training-active-pulse text-white inline-block">_</p>
+</div>
+<div class="bg-[#1a1b22] px-4 py-2 flex items-center justify-between border-t border-outline/20">
+<span class="text-[10px] text-outline">UTF-8 | LF | PYTHON 3.9</span>
+<div class="flex gap-2">
+<span class="material-symbols-outlined text-[14px] text-outline cursor-pointer hover:text-white" data-icon="search">search</span>
+<span class="material-symbols-outlined text-[14px] text-outline cursor-pointer hover:text-white" data-icon="download">download</span>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+<script>
+        // Micro-interaction for Log scrolling
+        const logViewer = document.querySelector('.terminal-glow');
+        if (logViewer) {
+            setInterval(() => {
+                logViewer.scrollTop = logViewer.scrollHeight;
+            }, 3000);
+        }
+
+        // Toggle radio button visual state
+        document.querySelectorAll('input[type="radio"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                const radios = document.querySelectorAll('input[name="'+e.target.name+'"]');
+                radios.forEach(r => {
+                    const icon = r.nextElementSibling.querySelector('.material-symbols-outlined');
+                    if (r.checked) {
+                        icon.style.fontVariationSettings = "'FILL' 1";
+                    } else {
+                        icon.style.fontVariationSettings = "'FILL' 0";
+                    }
+                });
+            });
+        });
+    </script>
+</body></html>

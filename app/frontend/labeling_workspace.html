@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>ML Pipeline - Labeling Workspace</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary-container": "#54647a",
+                        "background": "#fbf8ff",
+                        "on-error-container": "#93000a",
+                        "surface-variant": "#e3e1ea",
+                        "on-tertiary-fixed-variant": "#713700",
+                        "primary-fixed-dim": "#bac3ff",
+                        "on-secondary-fixed": "#0b1c30",
+                        "on-secondary": "#ffffff",
+                        "outline": "#757684",
+                        "surface-container-highest": "#e3e1ea",
+                        "surface-container-high": "#e9e7f0",
+                        "on-error": "#ffffff",
+                        "tertiary-container": "#8f4700",
+                        "primary-fixed": "#dee0ff",
+                        "on-surface-variant": "#454652",
+                        "error-container": "#ffdad6",
+                        "surface": "#fbf8ff",
+                        "on-tertiary-container": "#ffc7a2",
+                        "surface-container-low": "#f4f2fc",
+                        "secondary-fixed": "#d3e4fe",
+                        "primary": "#24389c",
+                        "outline-variant": "#c5c5d4",
+                        "secondary-container": "#d0e1fb",
+                        "tertiary-fixed": "#ffdcc6",
+                        "on-primary": "#ffffff",
+                        "surface-container": "#efedf6",
+                        "surface-dim": "#dbd9e2",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-container": "#cacfff",
+                        "surface-tint": "#4355b9",
+                        "tertiary": "#6c3400",
+                        "on-secondary-fixed-variant": "#38485d",
+                        "on-primary-fixed": "#00105c",
+                        "inverse-on-surface": "#f2eff9",
+                        "secondary": "#505f76",
+                        "tertiary-fixed-dim": "#ffb784",
+                        "on-primary-fixed-variant": "#293ca0",
+                        "on-surface": "#1a1b22",
+                        "surface-bright": "#fbf8ff",
+                        "primary-container": "#3f51b5",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#301400",
+                        "on-background": "#1a1b22",
+                        "inverse-primary": "#bac3ff",
+                        "inverse-surface": "#2f3037",
+                        "secondary-fixed-dim": "#b7c8e1"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "container-gap": "1.5rem",
+                        "sidebar-width": "260px",
+                        "table-cell-padding": "0.75rem 1rem",
+                        "stack-gap-sm": "0.5rem",
+                        "stack-gap-md": "1rem"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "mono-data": ["JetBrains Mono"],
+                        "title-sm": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "body-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                        "mono-data": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "title-sm": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "display-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #c5c5d4; border-radius: 2px; }
+        .bbox-overlay { pointer-events: none; }
+        .active-row { background-color: rgba(67, 85, 185, 0.05); }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md overflow-hidden">
+<!-- SideNavBar (JSON Derived) -->
+<aside class="fixed left-0 top-0 h-screen w-[260px] border-r border-outline-variant dark:border-outline bg-surface dark:bg-inverse-surface flex flex-col py-6 transition-all duration-200 ease-in-out z-50">
+<div class="px-6 mb-8">
+<h1 class="font-headline-md text-headline-md font-bold text-primary dark:text-inverse-primary">ML Pipeline</h1>
+<p class="text-xs text-on-surface-variant/70 mt-1">v2.4.0-stable</p>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">dashboard</span>
+<span class="font-body-md">Dashboard</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">input</span>
+<span class="font-body-md">Data Ingestion</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">visibility</span>
+<span class="font-body-md">OCR Preview</span>
+</a>
+<a class="flex items-center px-6 py-3 border-l-4 border-primary text-primary font-bold bg-primary-container/10 transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">edit_note</span>
+<span class="font-body-md">Labeling Workspace</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">storage</span>
+<span class="font-body-md">Dataset Builder</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">model_training</span>
+<span class="font-body-md">Training Center</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">analytics</span>
+<span class="font-body-md">Evaluation</span>
+</a>
+<a class="flex items-center px-6 py-3 text-on-surface-variant dark:text-surface-variant hover:bg-surface-container-high transition-all duration-200" href="#">
+<span class="material-symbols-outlined mr-3">history</span>
+<span class="font-body-md">Run History</span>
+</a>
+</nav>
+<div class="px-6 pt-6 border-t border-outline-variant space-y-1">
+<a class="flex items-center py-2 text-on-surface-variant hover:text-on-surface" href="#">
+<span class="material-symbols-outlined mr-3">settings</span>
+<span class="font-body-md">Settings</span>
+</a>
+<a class="flex items-center py-2 text-on-surface-variant hover:text-on-surface" href="#">
+<span class="material-symbols-outlined mr-3">description</span>
+<span class="font-body-md">Documentation</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="ml-[260px] h-screen flex flex-col">
+<!-- TopAppBar (JSON Derived) -->
+<header class="h-16 flex justify-between items-center px-6 border-b border-outline-variant bg-surface dark:bg-surface-dim shadow-sm shrink-0">
+<div class="flex items-center space-x-4">
+<span class="font-headline-md text-title-sm font-extrabold text-on-surface">OCR &amp; GCN Pipeline</span>
+<div class="h-8 w-px bg-outline-variant mx-2"></div>
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+<input class="pl-10 pr-4 py-1.5 bg-surface-container-low border border-outline-variant rounded-full text-sm w-64 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all" placeholder="Search tokens or documents..." type="text"/>
+</div>
+</div>
+<div class="flex items-center space-x-4">
+<button class="p-2 hover:bg-surface-container-low rounded-full transition-colors cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined text-on-surface-variant">notifications</span>
+</button>
+<button class="p-2 hover:bg-surface-container-low rounded-full transition-colors cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined text-on-surface-variant">help_outline</span>
+</button>
+<div class="flex items-center space-x-3 ml-2 pl-4 border-l border-outline-variant">
+<div class="text-right">
+<p class="font-bold text-sm leading-none text-on-surface">ML Engineer</p>
+<p class="text-[10px] text-on-surface-variant uppercase tracking-wider font-bold">Admin</p>
+</div>
+<img alt="ML Engineer Profile" class="w-8 h-8 rounded-full border border-outline-variant bg-surface-container" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC38FlgGH7ie8paFTRPsGdwFG_JQztmkCcwEibjSWGKMoeth7hSMuYuKiy-Y89fm1n-osivjmeRdL3rHQNT2aX4XcH7g5xcBTNqJxq7rfY3-AiyvXtRYYrRCnaNPXBS9x0eYoJ4Bqhrjddi8oKV0akKhc5-_ackJeo6F-ZAk9ldplDV4DumDubt_Nm3L-gU0QwcMosh6kI75w250JYeg1PKqjEBfu2-tcizVOHyUqMWNbhtrDuFVcjJuHNi1nJywgwi7uLtaB6hiQ"/>
+</div>
+</div>
+</header>
+<!-- Progress Bar Strip -->
+<div class="px-6 py-2 bg-surface-container-lowest border-b border-outline-variant flex items-center justify-between">
+<div class="flex items-center space-x-4 flex-1">
+<span class="text-body-sm font-bold text-primary">Document Labeling Progress: 85%</span>
+<div class="w-full max-w-lg h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary transition-all duration-500" style="width: 85%"></div>
+</div>
+</div>
+<div class="flex items-center space-x-2 text-on-surface-variant">
+<span class="text-xs font-mono-data">DOC_ID: INV-2023-0042</span>
+<span class="h-3 w-px bg-outline-variant"></span>
+<span class="text-xs font-mono-data">BATCH: FIN_PROD_Q4</span>
+</div>
+</div>
+<!-- Labeling Workspace Body -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Left: Image Viewer (GCN & OCR Well) -->
+<section class="w-7/12 flex flex-col border-r border-outline-variant bg-surface-container-highest relative">
+<!-- Toolbar -->
+<div class="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center bg-inverse-surface/90 backdrop-blur-md text-surface px-4 py-2 rounded-full shadow-lg space-x-4">
+<button class="hover:text-primary-fixed-dim transition-colors"><span class="material-symbols-outlined text-[20px]">zoom_in</span></button>
+<button class="hover:text-primary-fixed-dim transition-colors"><span class="material-symbols-outlined text-[20px]">zoom_out</span></button>
+<span class="h-4 w-px bg-outline/50"></span>
+<button class="hover:text-primary-fixed-dim transition-colors"><span class="material-symbols-outlined text-[20px]">rotate_right</span></button>
+<button class="hover:text-primary-fixed-dim transition-colors"><span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">layers</span></button>
+<span class="h-4 w-px bg-outline/50"></span>
+<span class="text-[11px] font-mono-data uppercase tracking-widest font-bold">100% Zoom</span>
+</div>
+<!-- Viewer Well -->
+<div class="flex-1 overflow-auto p-12 flex items-center justify-center bg-[#1E293B] custom-scrollbar">
+<div class="relative shadow-2xl bg-white border border-outline-variant">
+<!-- Invoice Mockup Image -->
+<img class="w-[600px] h-auto opacity-95" data-alt="A highly detailed close-up of a high-contrast black and white professional corporate invoice lying on a dark slate desk. Digital teal bounding boxes encase every block of text, highlighting individual items like tax codes and amounts. The lighting is crisp and cinematic, emphasizing the professional ML data engineering context. The overall mood is precise, technical, and high-performance." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCDTnMK91SHaGd2MJM5c_Zm4Qof20-Z7JRfu5HR4tRgu3dU274RQMMKpQDJ8k0ogG4saLuUm-iZ8GMwm_ZWoXINvH7YO17OoHEy1SCaIsgVTjVpcQQodu01XZaFWOovREn2UTqwX32gHd-5FJN-oDhOmw1uhOtfFB4ayWNkQV__y44B5rDTOHS11adpyV2CaAnWtn34A4SEJwc-OWiVFocHQdJOu1lfACEi0zj3Xbq5M-oaxyZs5dAJ8epffcVF_V1Yyk5EkMtejw"/>
+<!-- SVG Bounding Boxes Overlay -->
+<svg class="absolute inset-0 w-full h-full bbox-overlay" viewbox="0 0 600 800">
+<!-- Example BBoxes -->
+<rect fill="rgba(36, 56, 156, 0.1)" height="30" stroke="#24389c" stroke-width="2" width="120" x="50" y="40"></rect>
+<rect fill="rgba(36, 56, 156, 0.1)" height="25" stroke="#24389c" stroke-width="2" width="100" x="420" y="40"></rect>
+<rect fill="rgba(36, 56, 156, 0.1)" height="20" stroke="#24389c" stroke-width="2" width="300" x="50" y="200"></rect>
+<rect fill="rgba(36, 56, 156, 0.1)" height="20" stroke="#24389c" stroke-width="2" width="150" x="50" y="230"></rect>
+<!-- Active Selection Highlight -->
+<rect class="animate-pulse" fill="rgba(186, 26, 26, 0.1)" height="40" stroke="#ba1a1a" stroke-width="2" width="120" x="400" y="650"></rect>
+</svg>
+</div>
+</div>
+</section>
+<!-- Right: Token Labeling Table -->
+<section class="w-5/12 flex flex-col bg-surface">
+<div class="p-4 border-b border-outline-variant bg-surface-container-low flex justify-between items-center">
+<h2 class="font-title-sm text-title-sm text-on-surface">Token List (42 Tokens)</h2>
+<div class="flex space-x-2">
+<span class="flex items-center px-2 py-1 bg-tertiary-container/20 text-tertiary rounded text-[10px] font-bold uppercase tracking-tight">
+<span class="material-symbols-outlined text-[14px] mr-1">auto_awesome</span> 
+                            Auto-labeling Active
+                        </span>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto custom-scrollbar">
+<table class="w-full text-left border-collapse">
+<thead class="sticky top-0 bg-surface-container z-20">
+<tr>
+<th class="p-table-cell-padding text-[11px] font-bold uppercase tracking-widest text-on-surface-variant border-b border-outline-variant">Text Content</th>
+<th class="p-table-cell-padding text-[11px] font-bold uppercase tracking-widest text-on-surface-variant border-b border-outline-variant">Conf.</th>
+<th class="p-table-cell-padding text-[11px] font-bold uppercase tracking-widest text-on-surface-variant border-b border-outline-variant">Label Assignment</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/30">
+<!-- Table Row 1 -->
+<tr class="hover:bg-surface-container-high transition-colors group">
+<td class="p-table-cell-padding font-mono-data text-body-sm">2023-11-24</td>
+<td class="p-table-cell-padding">
+<span class="text-xs font-mono-data text-on-secondary-container">0.99</span>
+</td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-2">
+<select class="bg-surface border border-outline-variant rounded-lg text-xs py-1 px-2 focus:ring-1 focus:ring-primary min-w-[140px]">
+<option>OTHER</option>
+<option selected="">DATE</option>
+<option>TAX_CODE</option>
+<option>TOTAL_AMOUNT</option>
+</select>
+<span class="text-[10px] font-bold text-outline bg-surface-container-highest px-1.5 py-0.5 rounded border border-outline-variant group-hover:text-primary transition-colors">ALT+1</span>
+</div>
+</td>
+</tr>
+<!-- Table Row 2 -->
+<tr class="hover:bg-surface-container-high transition-colors group">
+<td class="p-table-cell-padding font-mono-data text-body-sm">VAT88211003</td>
+<td class="p-table-cell-padding">
+<span class="text-xs font-mono-data text-on-secondary-container">0.97</span>
+</td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-2">
+<select class="bg-surface border border-outline-variant rounded-lg text-xs py-1 px-2 focus:ring-1 focus:ring-primary min-w-[140px]">
+<option>OTHER</option>
+<option>DATE</option>
+<option selected="">TAX_CODE</option>
+<option>TOTAL_AMOUNT</option>
+</select>
+<span class="text-[10px] font-bold text-outline bg-surface-container-highest px-1.5 py-0.5 rounded border border-outline-variant group-hover:text-primary transition-colors">ALT+2</span>
+</div>
+</td>
+</tr>
+<!-- Table Row 3 (Active Item) -->
+<tr class="active-row group">
+<td class="p-table-cell-padding font-mono-data text-body-sm font-bold text-primary">1,240,000</td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-1">
+<div class="w-1.5 h-1.5 rounded-full bg-error animate-pulse"></div>
+<span class="text-xs font-mono-data text-error font-bold">0.64</span>
+</div>
+</td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-2">
+<select class="bg-surface border-2 border-primary rounded-lg text-xs py-1 px-2 focus:ring-1 focus:ring-primary min-w-[140px] font-bold">
+<option>OTHER</option>
+<option>DATE</option>
+<option>TAX_CODE</option>
+<option selected="">TOTAL_AMOUNT</option>
+</select>
+<span class="text-[10px] font-bold text-primary bg-primary-fixed-dim/20 px-1.5 py-0.5 rounded border border-primary transition-colors">ALT+3</span>
+</div>
+</td>
+</tr>
+<!-- Table Row 4 -->
+<tr class="hover:bg-surface-container-high transition-colors group">
+<td class="p-table-cell-padding font-mono-data text-body-sm">GPU RTX 4090</td>
+<td class="p-table-cell-padding">
+<span class="text-xs font-mono-data text-on-secondary-container">0.92</span>
+</td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-2">
+<select class="bg-surface border border-outline-variant rounded-lg text-xs py-1 px-2 focus:ring-1 focus:ring-primary min-w-[140px]">
+<option>OTHER</option>
+<option selected="">PRODUCT_NAME</option>
+<option>UNIT_PRICE</option>
+</select>
+<span class="text-[10px] font-bold text-outline bg-surface-container-highest px-1.5 py-0.5 rounded border border-outline-variant group-hover:text-primary transition-colors">ALT+4</span>
+</div>
+</td>
+</tr>
+<!-- Row 5 -->
+<tr class="hover:bg-surface-container-high transition-colors group">
+<td class="p-table-cell-padding font-mono-data text-body-sm">1.000,00</td>
+<td class="p-table-cell-padding">
+<span class="text-xs font-mono-data text-on-secondary-container">0.89</span>
+</td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-2">
+<select class="bg-surface border border-outline-variant rounded-lg text-xs py-1 px-2 focus:ring-1 focus:ring-primary min-w-[140px]">
+<option>OTHER</option>
+<option>PRODUCT_NAME</option>
+<option selected="">UNIT_PRICE</option>
+</select>
+<span class="text-[10px] font-bold text-outline bg-surface-container-highest px-1.5 py-0.5 rounded border border-outline-variant group-hover:text-primary transition-colors">ALT+5</span>
+</div>
+</td>
+</tr>
+<!-- Filler Rows for aesthetic -->
+<tr class="hover:bg-surface-container-high transition-colors group">
+<td class="p-table-cell-padding font-mono-data text-body-sm">Invoice #</td>
+<td class="p-table-cell-padding"><span class="text-xs font-mono-data text-on-secondary-container">0.99</span></td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-2">
+<select class="bg-surface border border-outline-variant rounded-lg text-xs py-1 px-2 focus:ring-1 focus:ring-primary min-w-[140px]">
+<option selected="">OTHER</option>
+<option>DATE</option>
+</select>
+<span class="text-[10px] font-bold text-outline bg-surface-container-highest px-1.5 py-0.5 rounded border border-outline-variant group-hover:text-primary transition-colors">ALT+0</span>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-high transition-colors group">
+<td class="p-table-cell-padding font-mono-data text-body-sm">Shipping</td>
+<td class="p-table-cell-padding"><span class="text-xs font-mono-data text-on-secondary-container">0.94</span></td>
+<td class="p-table-cell-padding">
+<div class="flex items-center space-x-2">
+<select class="bg-surface border border-outline-variant rounded-lg text-xs py-1 px-2 focus:ring-1 focus:ring-primary min-w-[140px]">
+<option selected="">OTHER</option>
+<option>TOTAL_AMOUNT</option>
+</select>
+<span class="text-[10px] font-bold text-outline bg-surface-container-highest px-1.5 py-0.5 rounded border border-outline-variant group-hover:text-primary transition-colors">ALT+0</span>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Entity Shortcut Map Legend -->
+<div class="p-4 bg-surface-container-low border-t border-outline-variant grid grid-cols-2 gap-2">
+<div class="flex items-center justify-between px-2 py-1 bg-surface rounded border border-outline-variant/30">
+<span class="text-[10px] font-bold text-on-surface-variant">OTHER</span>
+<kbd class="text-[9px] font-mono-data bg-surface-container-highest px-1 rounded">Alt+0</kbd>
+</div>
+<div class="flex items-center justify-between px-2 py-1 bg-surface rounded border border-outline-variant/30">
+<span class="text-[10px] font-bold text-on-surface-variant">DATE</span>
+<kbd class="text-[9px] font-mono-data bg-surface-container-highest px-1 rounded">Alt+1</kbd>
+</div>
+<div class="flex items-center justify-between px-2 py-1 bg-surface rounded border border-outline-variant/30">
+<span class="text-[10px] font-bold text-on-surface-variant">TAX_CODE</span>
+<kbd class="text-[9px] font-mono-data bg-surface-container-highest px-1 rounded">Alt+2</kbd>
+</div>
+<div class="flex items-center justify-between px-2 py-1 bg-surface rounded border border-outline-variant/30">
+<span class="text-[10px] font-bold text-on-surface-variant">TOTAL_AMOUNT</span>
+<kbd class="text-[9px] font-mono-data bg-surface-container-highest px-1 rounded">Alt+3</kbd>
+</div>
+</div>
+</section>
+</div>
+<!-- Footer Actions -->
+<footer class="h-16 px-6 border-t border-outline-variant bg-surface flex items-center justify-between shrink-0">
+<div class="flex items-center space-x-6">
+<button class="flex items-center text-on-surface-variant hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined mr-2">arrow_back</span>
+<span class="text-sm font-bold">Previous Document</span>
+</button>
+<div class="flex items-center space-x-1">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="text-xs font-mono-data">Batch Processing Mode</span>
+</div>
+</div>
+<div class="flex items-center space-x-4">
+<button class="px-5 py-2 border border-outline text-on-surface hover:bg-surface-container-low rounded-lg text-sm font-bold flex items-center transition-all active:opacity-80">
+<span class="material-symbols-outlined mr-2 text-[18px]">download</span>
+                    Export CSV
+                </button>
+<button class="px-6 py-2 bg-primary text-on-primary hover:bg-primary-container rounded-lg text-sm font-bold shadow-sm flex items-center transition-all active:opacity-80">
+                    Save &amp; Next
+                    <span class="material-symbols-outlined ml-2 text-[18px]">arrow_forward</span>
+</button>
+</div>
+</footer>
+</main>
+<!-- Hotkeys Toast (Micro-interaction) -->
+<div class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-inverse-surface text-surface-bright px-4 py-2 rounded-full text-xs font-bold shadow-xl opacity-0 translate-y-4 transition-all duration-300 pointer-events-none z-[100]" id="hotkey-toast">
+        Hotkey Detected: <span class="text-primary-fixed">TOTAL_AMOUNT (Alt+3)</span> Applied
+    </div>
+<script>
+        // Micro-interaction simulation
+        document.addEventListener('keydown', (e) => {
+            if (e.altKey && (e.key >= '0' && e.key <= '5')) {
+                const toast = document.getElementById('hotkey-toast');
+                toast.classList.remove('opacity-0', 'translate-y-4');
+                toast.classList.add('opacity-100', 'translate-y-0');
+                
+                setTimeout(() => {
+                    toast.classList.add('opacity-0', 'translate-y-4');
+                    toast.classList.remove('opacity-100', 'translate-y-0');
+                }, 2000);
+            }
+        });
+
+        // Toggle BBox visibility simulation
+        const layerBtn = document.querySelector('[style*="FILL\' 1;"]');
+        let layersVisible = true;
+        layerBtn?.addEventListener('click', () => {
+            layersVisible = !layersVisible;
+            document.querySelector('.bbox-overlay').style.opacity = layersVisible ? '1' : '0';
+            layerBtn.style.color = layersVisible ? '#bac3ff' : 'white';
+        });
+    </script>
+</body></html>

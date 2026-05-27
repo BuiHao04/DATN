@@ -22,19 +22,44 @@ cd <project_dir>\src
 pip install -r requirements.txt
 ```
 
-## Chay full app (Frontend + Backend API)
+## Chay Frontend + Backend
 
-```bash
-cd <project_dir>
-pip install -r app/requirements-web.txt
-cd src && pip install -r requirements.txt && cd ..
-./app/run_full_app.sh
+### 1) Cai dat dependencies
+
+```powershell
+cd C:\Users\PC\Documents\datn_hao\DATN
+conda activate datn_hao
+pip install -r app\requirements-web.txt
+pip install -r src\requirements.txt
 ```
 
-Mo trinh duyet:
+### 2) Build Frontend (React -> static files)
 
-- `http://localhost:8080/` (dashboard)
-- API health: `http://localhost:8080/api/health`
+```powershell
+cd C:\Users\PC\Documents\datn_hao\DATN\app\web
+npm install
+npm run build
+```
+
+Sau khi build, file se duoc tao tai:
+- `app/frontend/dist/`
+
+### 3) Chay Backend API (FastAPI + serve frontend)
+
+```powershell
+cd C:\Users\PC\Documents\datn_hao\DATN
+conda activate datn_hao
+uvicorn app.backend.main:app --reload --host 127.0.0.1 --port 8080
+```
+
+### 4) Truy cap
+
+- Giao dien: `http://127.0.0.1:8080/frontend/`
+- API health: `http://127.0.0.1:8080/api/health`
+
+Luu y:
+- Moi lan sua code trong `app/web/src`, can chay lai `npm run build`.
+- Backend co `--reload` nen se tu restart khi sua file Python.
 
 ## Cau hinh `.env`
 

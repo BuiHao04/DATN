@@ -221,3 +221,14 @@ __marimo__/
 # Project artifacts
 data/
 outputs/
+src/data/
+app/jobs/
+
+# Frontend local deps/build cache
+app/web/node_modules/
+app/frontend/node_modules/
+
+# Local env files
+.env.*
+!.env.example
+myenv/

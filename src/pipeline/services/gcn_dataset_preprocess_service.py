@@ -11,6 +11,11 @@ from pipeline.core.gcn_classifier import build_features
 from pipeline.core.graph_builder import build_graph_edges
 from pipeline.core.schema import LABEL_TO_ID, OCRNode
 
+LABEL_ALIASES = {
+    "PRODUCT_NAME": "ITEM_NAME",
+    "UNIT_PRICE": "ITEM_UNIT_PRICE",
+}
+
 
 class GCNDatasetPreprocessService:
     """Build GCN training dataset JSON from tabular CSV annotations."""
@@ -165,6 +170,8 @@ class GCNDatasetPreprocessService:
             return int(value)
 
         norm = value.upper()
+        if norm in LABEL_ALIASES:
+            norm = LABEL_ALIASES[norm]
         if norm not in LABEL_TO_ID:
             valid = ", ".join(sorted(LABEL_TO_ID.keys()))
             raise ValueError(f"Unknown label '{value}'. Valid labels: {valid}")

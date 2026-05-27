@@ -79,6 +79,10 @@ def classify_nodes(nodes: List[OCRNode], edges: List[Tuple[int, int, float]]) ->
             labels.append(LABEL_TO_ID["TOTAL_AMOUNT"])
         elif any(c.isdigit() for c in text) and ("/" in text or "-" in text) and len(text) >= 8:
             labels.append(LABEL_TO_ID["DATE"])
+        elif any(c.isdigit() for c in text) and any(k in context for k in ["đơn giá", "unit", "price", "vnd"]):
+            labels.append(LABEL_TO_ID["ITEM_UNIT_PRICE"])
+        elif any(c.isalpha() for c in text):
+            labels.append(LABEL_TO_ID["ITEM_NAME"])
         else:
             labels.append(LABEL_TO_ID["OTHER"])
     return labels

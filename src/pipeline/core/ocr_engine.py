@@ -1,14 +1,23 @@
 ﻿from __future__ import annotations
 
+import os
 from typing import List
 
+import paddle
 from paddleocr import PaddleOCR
 
 from pipeline.core.schema import OCRNode
 
 
 def run_ocr(image_path: str, lang: str = "en") -> List[OCRNode]:
-    ocr = PaddleOCR(use_angle_cls=True, lang=lang)
+    env_force = os.getenv("OCR_USE_GPU", "").strip().lower()
+    if env_force in {"1", "true", "yes"}:
+        use_gpu = True
+    elif env_force in {"0", "false", "no"}:
+        use_gpu = False
+    else:
+        use_gpu = bool(paddle.is_compiled_with_cuda())
+    ocr = PaddleOCR(use_angle_cls=True, lang=lang, use_gpu=use_gpu)
 
     # PaddleOCR API differs by version:
     # - old: ocr.ocr(image_path, cls=True)

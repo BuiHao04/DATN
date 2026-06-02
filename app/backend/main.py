@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = ROOT / "src"
 FRONTEND_DIR = ROOT / "app" / "frontend" / "dist"
+FRONTEND_FALLBACK_DIR = ROOT / "app" / "frontend"
 JOBS_FILE = ROOT / "app" / "jobs" / "jobs.json"
 STAGE_B_RAW_DIR = SRC_DIR / "data" / "stage_b_raw_images"
 INVOICE_LABELS = [
@@ -384,12 +385,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+if FRONTEND_DIR.exists():
+    app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+elif FRONTEND_FALLBACK_DIR.exists():
+    app.mount("/frontend", StaticFiles(directory=str(FRONTEND_FALLBACK_DIR)), name="frontend")
 
 
 @app.get("/")
 def root() -> RedirectResponse:
-    return RedirectResponse(url="/frontend/")
+    if FRONTEND_DIR.exists():
+        return RedirectResponse(url="/frontend/")
+    return RedirectResponse(url="/frontend/dashboard.html")
 
 
 @app.get("/api/health")

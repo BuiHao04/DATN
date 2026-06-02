@@ -182,6 +182,9 @@ def cmd_prepare_ocr_labeling(args: argparse.Namespace) -> None:
         lang=args.lang,
         save_debug_images=bool(args.save_debug_images),
         copy_images=bool(args.copy_images),
+        num_workers=args.num_workers,
+        worker_index=args.worker_index,
+        save_every_images=args.save_every_images,
     )
     logger.info("OCR labeling prep done: {}", out)
 
@@ -269,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     gcn = sub.add_parser("gcn_infer")
     gcn.add_argument("--image", required=True)
-    gcn.add_argument("--lang", default="en")
+    gcn.add_argument("--lang", default="vi")
     gcn.add_argument("--checkpoint", default=None, help="Trained GCN checkpoint (.pt). If omitted, use rule-based fallback.")
     gcn.add_argument("--ocr-debug-image", default="outputs/ocr_boxes.jpg")
     gcn.add_argument("--output-json", default="outputs/ocr_result.json")
@@ -278,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     pre = sub.add_parser("pretrained")
     pre.add_argument("--project-dir", default=".")
     pre.add_argument("--image", required=True)
-    pre.add_argument("--lang", default="en")
+    pre.add_argument("--lang", default="vi")
     pre.add_argument("--ocr-debug-image", default="outputs/ocr_boxes_pretrained.jpg")
     pre.add_argument("--output-json", default="outputs/pretrained_invoice_result.json")
     pre.set_defaults(func=cmd_pretrained)
@@ -381,9 +384,12 @@ def build_parser() -> argparse.ArgumentParser:
     po = sub.add_parser("prepare_ocr_labeling")
     po.add_argument("--input-dir", required=True, help="Folder containing raw invoice images")
     po.add_argument("--output-dir", default="data/labeling_stage_b")
-    po.add_argument("--lang", default="en")
+    po.add_argument("--lang", default="vi")
     po.add_argument("--save-debug-images", type=int, default=1)
     po.add_argument("--copy-images", type=int, default=1)
+    po.add_argument("--num-workers", type=int, default=1, help="Total parallel workers")
+    po.add_argument("--worker-index", type=int, default=0, help="This worker index [0..num_workers-1]")
+    po.add_argument("--save-every-images", type=int, default=10, help="Flush CSV every N images")
     po.set_defaults(func=cmd_prepare_ocr_labeling)
 
     # Single command for full training flow (A -> B -> eval).

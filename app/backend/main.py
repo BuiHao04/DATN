@@ -25,6 +25,26 @@ FRONTEND_DIR = ROOT / "app" / "frontend" / "dist"
 FRONTEND_FALLBACK_DIR = ROOT / "app" / "frontend"
 JOBS_FILE = ROOT / "app" / "jobs" / "jobs.json"
 STAGE_B_RAW_DIR = SRC_DIR / "data" / "stage_b_raw_images"
+
+
+def _load_env_file() -> None:
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+_load_env_file()
+
 INVOICE_LABELS = [
     "MERCHANT_NAME",
     "MERCHANT_ADDRESS",
@@ -259,6 +279,16 @@ def _load_jobs() -> list[dict[str, Any]]:
 def _save_jobs(jobs: list[dict[str, Any]]) -> None:
     JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
     JOBS_FILE.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_csv_rows(csv_path: Path, fields: list[str], rows: list[dict[str, Any]]) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = csv_path.with_suffix(csv_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp_path.replace(csv_path)
 
 
 def _build_cmd(mode: str, args: dict[str, Any]) -> list[str]:
@@ -651,9 +681,21 @@ def _llm_suggest_labels(texts: list[str], labels: list[str], model: str) -> list
     if not isinstance(arr, list):
         arr = _extract_json_array(content)
     out = [str(x).strip().upper() if str(x).strip().upper() in labels else "OTHER" for x in arr]
-    if len(out) != len(texts):
-        raise ValueError(f"Invalid labels length from LLM: {len(out)} != {len(texts)}")
+    if len(out) < len(texts):
+        # Some models occasionally return fewer labels than requested.
+        # Keep the valid prefix and backfill the remainder with deterministic rules.
+        out.extend(_suggest_label_from_text(t) for t in texts[len(out) :])
+    elif len(out) > len(texts):
+        out = out[: len(texts)]
     return out
+
+
+def _ensure_openai_api_key() -> None:
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Missing OPENAI_API_KEY. Add it to DATN/.env or current environment, then restart backend.",
+        )
 
 
 def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
@@ -696,6 +738,17 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
         total_docs = len(doc_ids)
         logs: list[str] = [f"Tong so anh can goi y: {total_docs}"]
         done_docs = 0
+        jobs = _load_jobs()
+        for j in jobs:
+            if j["id"] == job_id:
+                j["progress"] = {
+                    "current_docs": 0,
+                    "total_docs": total_docs,
+                    "percent": 0,
+                    "current_batch_docs": 0,
+                }
+                j["stdout"] = "\n".join(logs)
+        _save_jobs(jobs)
 
         for s in range(0, total_docs, batch_docs):
             batch_doc_ids = doc_ids[s : s + batch_docs]
@@ -729,9 +782,10 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
                 rows[ridx][label_col] = labels_out[pos]
 
             done_docs += len(batch_doc_ids)
-            pct = int((done_docs * 100) / total_docs) if total_docs > 0 else 100
+            pct = max(1, round((done_docs * 100) / total_docs)) if total_docs > 0 else 100
+            _write_csv_rows(csv_path, fields, rows)
             logs.append(
-                f"[{done_docs}/{total_docs}] batch_docs={len(batch_doc_ids)} rows={len(batch_row_indices)} mode={strategy_used}"
+                f"[{done_docs}/{total_docs}] batch_docs={len(batch_doc_ids)} rows={len(batch_row_indices)} mode={strategy_used} saved=ok"
             )
 
             jobs = _load_jobs()
@@ -746,10 +800,7 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
                     j["stdout"] = "\n".join(logs[-120:])
             _save_jobs(jobs)
 
-        with csv_path.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fields)
-            writer.writeheader()
-            writer.writerows(rows)
+        _write_csv_rows(csv_path, fields, rows)
 
         jobs = _load_jobs()
         for j in jobs:
@@ -773,6 +824,9 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
 
 @app.post("/api/pipeline/labeling-auto-suggest")
 def labeling_auto_suggest(req: AutoSuggestLabelsRequest) -> dict[str, Any]:
+    if req.strategy == "llm":
+        _ensure_openai_api_key()
+
     csv_path = SRC_DIR / req.input_csv
     if not csv_path.exists():
         raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
@@ -831,6 +885,9 @@ def labeling_auto_suggest(req: AutoSuggestLabelsRequest) -> dict[str, Any]:
 
 @app.post("/api/pipeline/labeling-auto-suggest-start")
 def labeling_auto_suggest_start(req: AutoSuggestStartRequest) -> dict[str, Any]:
+    if int(req.require_llm) == 1:
+        _ensure_openai_api_key()
+
     return _enqueue_background_job(
         mode="labeling_auto_suggest",
         args=req.model_dump(),

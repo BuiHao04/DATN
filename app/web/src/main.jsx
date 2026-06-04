@@ -155,14 +155,14 @@ function App(){
       label_col:"label",
       text_col:"text",
       doc_id_col:"doc_id",
-      only_empty:0,
-      llm_model:"gpt-4o-mini",
+      only_empty:1,
+      llm_model:"gpt-4.1-mini",
       batch_docs:10,
-      llm_text_batch_size:30,
+      llm_text_batch_size:10,
       require_llm:1
     });
     if(d?.id){
-      setLabelHint(`Đã tạo job AI gợi ý nhãn (ghi đè toàn bộ): ${d.id}. Theo dõi tiến trình ngay bên dưới.`);
+      setLabelHint(`Đã tạo job AI gợi ý nhãn cho các dòng còn trống: ${d.id}. Job sẽ lưu sau từng batch và bấm chạy tiếp sẽ không gán lại phần đã xong.`);
     }
   };
   const runDatasetCompile=async()=>{const v=await apiPost("/api/pipeline/validate-label-csv",{input_csv:dataset.input_csv,label_col:"label"}); if(!v?.ok){setOut(JSON.stringify({status:"blocked",reason:"Còn label rỗng, cần gán nhãn trước",validate:v},null,2)); return;} await apiPost("/api/pipeline/preprocess-gcn-dataset",dataset);};

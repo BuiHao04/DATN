@@ -47,7 +47,14 @@ body{margin:0;background:var(--bg);font-family:Inter,Segoe UI,Arial,sans-serif;c
 .modal-box{background:#fff;border-radius:10px;padding:10px;max-width:92vw;max-height:92vh;position:relative}
 .modal-box img{max-width:88vw;max-height:84vh;display:block}
 .modal-close{position:absolute;top:6px;right:6px;border:0;background:#111827;color:#fff;border-radius:6px;padding:4px 8px;cursor:pointer}
+.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}
+.card{background:#fff;border:1px solid #d4d0e1;border-radius:12px;padding:12px}
+.card .k{font-size:12px;color:#6b7280;margin-bottom:6px}.card .v{font-size:22px;font-weight:800}
+.split{display:grid;grid-template-columns:1.15fr .85fr;gap:10px}
+.stack{display:flex;flex-direction:column;gap:10px}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 @media (max-width:1200px){.app{grid-template-columns:220px 1fr}.path{max-width:260px}}
+@media (max-width:1100px){.cards,.split{grid-template-columns:1fr}}
 `;
 
 const NAV = [["prep", "Chuẩn bị dữ liệu"],["train", "Huấn luyện"],["results", "Kết quả & Đánh giá"]];
@@ -95,6 +102,9 @@ function App(){
   const [docView,setDocView]=useState([]);
   const [previewImage,setPreviewImage]=useState("");
   const [missingOnly,setMissingOnly]=useState(false);
+  const [trainA,setTrainA]=useState({dataset_json:"data/stage_a_dataset.json",val_dataset_json:"",checkpoint:"outputs/checkpoints/gcn_stage_a.pt",init_checkpoint:"",epochs:30,lr:0.001,early_stop_patience:0});
+  const [trainB,setTrainB]=useState({dataset_json:"data/stage_b_vi_dataset.json",val_dataset_json:"",base_checkpoint:"outputs/checkpoints/gcn_stage_a.pt",checkpoint:"outputs/checkpoints/gcn_stage_b.pt",epochs:20,lr:0.0005,early_stop_patience:0});
+  const [trainFull,setTrainFull]=useState({stage_a_json:"data/stage_a_dataset.json",stage_b_json:"data/stage_b_vi_dataset.json",stage_a_ckpt:"outputs/checkpoints/gcn_stage_a.pt",stage_b_ckpt:"outputs/checkpoints/gcn_stage_b.pt",stage_a_epochs:30,stage_b_epochs:20,stage_a_lr:0.001,stage_b_lr:0.0005,init_checkpoint:"",eval_json:"",output_eval:"outputs/gcn_eval_report.json"});
   const pollRef=useRef(null);
 
   const loadJobs=async()=>{try{const r=await fetch("/api/jobs");const d=await r.json();setJobs(Array.isArray(d)?d:[]);}catch{setJobs([])}};
@@ -106,6 +116,9 @@ function App(){
   const latestByMode=useMemo(()=>{const m={}; for(const j of jobs) if(!m[j.mode]) m[j.mode]=j; return m;},[jobs]);
   const ocrJob=latestByMode["prepare_ocr_labeling"]; const dsJob=latestByMode["preprocess_gcn_dataset"]; const hfJob=latestByMode["convert_hf_cord_to_csv"];
   const aiLabelJob=latestByMode["labeling_auto_suggest"];
+  const trainAJob=latestByMode["train_gcn_stage_a"];
+  const trainBJob=latestByMode["train_gcn_stage_b"];
+  const trainFullJob=latestByMode["train_gcn_full"];
   const statusClass=(s)=>s==="success"?"success":s==="failed"?"failed":s==="running"?"running":s==="queued"?"queued":"idle";
   const lastLog=(j)=>{if(!j) return "Chưa có log"; const t=(j.stderr||j.stdout||"").trim(); if(!t) return "Job đã tạo, đang chờ log..."; return t.split(/\r?\n/).slice(-25).join("\n");};
 
@@ -167,6 +180,9 @@ function App(){
   };
   const runDatasetCompile=async()=>{const v=await apiPost("/api/pipeline/validate-label-csv",{input_csv:dataset.input_csv,label_col:"label"}); if(!v?.ok){setOut(JSON.stringify({status:"blocked",reason:"Còn label rỗng, cần gán nhãn trước",validate:v},null,2)); return;} await apiPost("/api/pipeline/preprocess-gcn-dataset",dataset);};
   const runCordImport=async()=>{await apiPost("/api/pipeline/convert-hf-cord-to-csv",{dataset_id:"naver-clova-ix/cord-v2",split:"train",output_csv:"data/cord_train_nodes.csv",streaming:1});};
+  const runTrainA=async()=>{await apiPost("/api/pipeline/train-gcn-stage-a", {...trainA, val_dataset_json: trainA.val_dataset_json || null, init_checkpoint: trainA.init_checkpoint || null});};
+  const runTrainB=async()=>{await apiPost("/api/pipeline/train-gcn-stage-b", {...trainB, val_dataset_json: trainB.val_dataset_json || null});};
+  const runTrainFull=async()=>{await apiPost("/api/pipeline/train-gcn-full", {...trainFull, init_checkpoint: trainFull.init_checkpoint || null, eval_json: trainFull.eval_json || null});};
   const loadByDoc=async()=>{
     const d=await apiPost("/api/pipeline/labeling-by-doc",{
       input_csv:dataset.input_csv,
@@ -195,6 +211,9 @@ function App(){
     }
     return Array.from(grouped.values());
   }, [labelRows, docView]);
+  const trainRunning = [trainAJob, trainBJob, trainFullJob].some(j=>j?.status==="running" || j?.status==="queued");
+  const trainDoneCount = [trainAJob, trainBJob, trainFullJob].filter(j=>j?.status==="success").length;
+  const trainFailCount = [trainAJob, trainBJob, trainFullJob].filter(j=>j?.status==="failed").length;
 
   return <>
     <style>{css}</style>
@@ -207,7 +226,118 @@ function App(){
       <main className="main">
         <div className="topbar"><input className="search" placeholder="Tìm kiếm bước xử lý..."/></div>
         <div className="content">
-          {page!=="prep" ? <div className="step"><div className="step-body"><h3>{page}</h3><p className="p">Màn này sẽ làm tiếp sau.</p></div></div> : <>
+          {page==="train" ? <>
+            <h2 className="title">Huấn luyện GCN</h2>
+            <div className="subtitle">Màn này dùng để chạy train Stage A, fine-tune Stage B và full flow A {"->"} B. Backend đã có sẵn endpoint, giao diện này chỉ bọc lại để bạn cấu hình và theo dõi job.</div>
+
+            <div className="cards">
+              <div className="card"><div className="k">Job train đã chạy</div><div className="v">{[trainAJob,trainBJob,trainFullJob].filter(Boolean).length}</div></div>
+              <div className="card"><div className="k">Đang chạy</div><div className="v">{trainRunning?1:0}</div></div>
+              <div className="card"><div className="k">Thành công</div><div className="v">{trainDoneCount}</div></div>
+              <div className="card"><div className="k">Thất bại</div><div className="v">{trainFailCount}</div></div>
+            </div>
+
+            <div className="split">
+              <div className="stack">
+                <div className="step">
+                  <div className="step-head"><h3>Stage A: pretrain / train nền</h3><span className={`badge ${statusClass(trainAJob?.status)}`}>{(trainAJob?.status||"idle").toUpperCase()}</span></div>
+                  <div className="step-body">
+                    <div className="grid2">
+                      <input className="input" value={trainA.dataset_json} onChange={e=>setTrainA({...trainA,dataset_json:e.target.value})} placeholder="Dataset JSON train"/>
+                      <input className="input" value={trainA.val_dataset_json} onChange={e=>setTrainA({...trainA,val_dataset_json:e.target.value})} placeholder="Dataset JSON validation (tùy chọn)"/>
+                    </div>
+                    <div className="grid2" style={{marginTop:8}}>
+                      <input className="input" value={trainA.checkpoint} onChange={e=>setTrainA({...trainA,checkpoint:e.target.value})} placeholder="Checkpoint output"/>
+                      <input className="input" value={trainA.init_checkpoint} onChange={e=>setTrainA({...trainA,init_checkpoint:e.target.value})} placeholder="Init checkpoint (tùy chọn)"/>
+                    </div>
+                    <div className="grid3" style={{marginTop:8}}>
+                      <input className="input" type="number" value={trainA.epochs} onChange={e=>setTrainA({...trainA,epochs:Number(e.target.value)})} placeholder="Epochs"/>
+                      <input className="input" type="number" step="0.0001" value={trainA.lr} onChange={e=>setTrainA({...trainA,lr:Number(e.target.value)})} placeholder="Learning rate"/>
+                      <input className="input" type="number" value={trainA.early_stop_patience} onChange={e=>setTrainA({...trainA,early_stop_patience:Number(e.target.value)})} placeholder="Early stop"/>
+                    </div>
+                    <div className="actions" style={{marginTop:10}}><div className="tiny">POST /api/pipeline/train-gcn-stage-a</div><button className="btn dark" onClick={runTrainA}>Train Stage A</button></div>
+                  </div>
+                </div>
+
+                <div className="step">
+                  <div className="step-head"><h3>Stage B: fine-tune hóa đơn tiếng Việt</h3><span className={`badge ${statusClass(trainBJob?.status)}`}>{(trainBJob?.status||"idle").toUpperCase()}</span></div>
+                  <div className="step-body">
+                    <div className="grid2">
+                      <input className="input" value={trainB.dataset_json} onChange={e=>setTrainB({...trainB,dataset_json:e.target.value})} placeholder="Dataset JSON train"/>
+                      <input className="input" value={trainB.val_dataset_json} onChange={e=>setTrainB({...trainB,val_dataset_json:e.target.value})} placeholder="Dataset JSON validation (tùy chọn)"/>
+                    </div>
+                    <div className="grid2" style={{marginTop:8}}>
+                      <input className="input" value={trainB.base_checkpoint} onChange={e=>setTrainB({...trainB,base_checkpoint:e.target.value})} placeholder="Checkpoint Stage A"/>
+                      <input className="input" value={trainB.checkpoint} onChange={e=>setTrainB({...trainB,checkpoint:e.target.value})} placeholder="Checkpoint Stage B output"/>
+                    </div>
+                    <div className="grid3" style={{marginTop:8}}>
+                      <input className="input" type="number" value={trainB.epochs} onChange={e=>setTrainB({...trainB,epochs:Number(e.target.value)})} placeholder="Epochs"/>
+                      <input className="input" type="number" step="0.0001" value={trainB.lr} onChange={e=>setTrainB({...trainB,lr:Number(e.target.value)})} placeholder="Learning rate"/>
+                      <input className="input" type="number" value={trainB.early_stop_patience} onChange={e=>setTrainB({...trainB,early_stop_patience:Number(e.target.value)})} placeholder="Early stop"/>
+                    </div>
+                    <div className="actions" style={{marginTop:10}}><div className="tiny">POST /api/pipeline/train-gcn-stage-b</div><button className="btn dark" onClick={runTrainB}>Train Stage B</button></div>
+                  </div>
+                </div>
+
+                <div className="step">
+                  <div className="step-head"><h3>Full Flow: A {"->"} B {"->"} Eval</h3><span className={`badge ${statusClass(trainFullJob?.status)}`}>{(trainFullJob?.status||"idle").toUpperCase()}</span></div>
+                  <div className="step-body">
+                    <div className="grid2">
+                      <input className="input" value={trainFull.stage_a_json} onChange={e=>setTrainFull({...trainFull,stage_a_json:e.target.value})} placeholder="Stage A dataset JSON"/>
+                      <input className="input" value={trainFull.stage_b_json} onChange={e=>setTrainFull({...trainFull,stage_b_json:e.target.value})} placeholder="Stage B dataset JSON"/>
+                    </div>
+                    <div className="grid2" style={{marginTop:8}}>
+                      <input className="input" value={trainFull.stage_a_ckpt} onChange={e=>setTrainFull({...trainFull,stage_a_ckpt:e.target.value})} placeholder="Checkpoint Stage A"/>
+                      <input className="input" value={trainFull.stage_b_ckpt} onChange={e=>setTrainFull({...trainFull,stage_b_ckpt:e.target.value})} placeholder="Checkpoint Stage B"/>
+                    </div>
+                    <div className="grid2" style={{marginTop:8}}>
+                      <input className="input" value={trainFull.eval_json} onChange={e=>setTrainFull({...trainFull,eval_json:e.target.value})} placeholder="Dataset eval (tùy chọn)"/>
+                      <input className="input" value={trainFull.output_eval} onChange={e=>setTrainFull({...trainFull,output_eval:e.target.value})} placeholder="Output eval JSON"/>
+                    </div>
+                    <div className="grid2" style={{marginTop:8}}>
+                      <input className="input" value={trainFull.init_checkpoint} onChange={e=>setTrainFull({...trainFull,init_checkpoint:e.target.value})} placeholder="Init checkpoint cho Stage A (tùy chọn)"/>
+                      <div className="tiny" style={{display:"flex",alignItems:"center"}}>Dùng khi bạn muốn tiếp tục từ checkpoint có sẵn thay vì train Stage A từ đầu.</div>
+                    </div>
+                    <div className="grid3" style={{marginTop:8}}>
+                      <input className="input" type="number" value={trainFull.stage_a_epochs} onChange={e=>setTrainFull({...trainFull,stage_a_epochs:Number(e.target.value)})} placeholder="Epochs A"/>
+                      <input className="input" type="number" value={trainFull.stage_b_epochs} onChange={e=>setTrainFull({...trainFull,stage_b_epochs:Number(e.target.value)})} placeholder="Epochs B"/>
+                      <div />
+                    </div>
+                    <div className="grid2" style={{marginTop:8}}>
+                      <input className="input" type="number" step="0.0001" value={trainFull.stage_a_lr} onChange={e=>setTrainFull({...trainFull,stage_a_lr:Number(e.target.value)})} placeholder="LR A"/>
+                      <input className="input" type="number" step="0.0001" value={trainFull.stage_b_lr} onChange={e=>setTrainFull({...trainFull,stage_b_lr:Number(e.target.value)})} placeholder="LR B"/>
+                    </div>
+                    <div className="actions" style={{marginTop:10}}><div className="tiny">POST /api/pipeline/train-gcn-full</div><button className="btn primary" onClick={runTrainFull}>Chạy full flow</button></div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="stack">
+                <div className="step">
+                  <div className="step-head"><h3>Job train gần nhất</h3><span className={`badge ${statusClass(trainFullJob?.status || trainBJob?.status || trainAJob?.status)}`}>{((trainFullJob?.status || trainBJob?.status || trainAJob?.status || "idle")).toUpperCase()}</span></div>
+                  <div className="step-body">
+                    <div className="tiny">Stage A</div>
+                    <div className="term" style={{marginTop:6}}><h4>TRAIN STAGE A</h4><pre>{lastLog(trainAJob)}</pre></div>
+                    <div className="tiny" style={{marginTop:10}}>Stage B</div>
+                    <div className="term" style={{marginTop:6}}><h4>TRAIN STAGE B</h4><pre>{lastLog(trainBJob)}</pre></div>
+                    <div className="tiny" style={{marginTop:10}}>Full flow</div>
+                    <div className="term" style={{marginTop:6}}><h4>TRAIN FULL FLOW</h4><pre>{lastLog(trainFullJob)}</pre></div>
+                  </div>
+                </div>
+
+                <div className="step">
+                  <div className="step-head"><h3>Gợi ý sử dụng</h3><span className="badge idle">READY</span></div>
+                  <div className="step-body">
+                    <p className="p">Nếu bạn mới bắt đầu, nên train Stage A trước để tạo checkpoint nền, sau đó mới fine-tune Stage B bằng checkpoint của Stage A.</p>
+                    <p className="p" style={{marginTop:8}}>Nếu đã có sẵn `data/stage_b_vi_dataset.json`, bạn có thể bỏ qua full flow và chạy thẳng Stage B để tiết kiệm thời gian.</p>
+                    <p className="p" style={{marginTop:8}}>Khi có validation dataset, hãy bật `early_stop_patience` lớn hơn 0 để tránh train quá tay.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="step"><div className="step-head"><h3>Output API mới nhất</h3><span className="badge idle">READY</span></div><div className="step-body"><div className="term"><h4>APPLICATION/JSON</h4><pre>{out||"Chưa có phản hồi API"}</pre></div></div></div>
+          </> : page!=="prep" ? <div className="step"><div className="step-body"><h3>{page}</h3><p className="p">Màn này sẽ làm tiếp sau.</p></div></div> : <>
             <h2 className="title">Chuẩn bị dữ liệu</h2>
             <div className="subtitle">4 bước quan trọng: Upload dữ liệu {"->"} OCR tạo nhãn {"->"} Hoàn tất nhãn và compile dataset {"->"} Import bộ dữ liệu mẫu nếu cần.</div>
 

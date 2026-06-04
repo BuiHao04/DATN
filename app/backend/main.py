@@ -139,7 +139,7 @@ class AutoSuggestLabelsRequest(BaseModel):
     text_col: str = "text"
     only_empty: int = 1
     strategy: str = "llm"  # llm | rule
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-4.1-mini"
     batch_size: int = 30
 
 
@@ -149,9 +149,9 @@ class AutoSuggestStartRequest(BaseModel):
     text_col: str = "text"
     doc_id_col: str = "doc_id"
     only_empty: int = 1
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-4.1-mini"
     batch_docs: int = 10
-    llm_text_batch_size: int = 30
+    llm_text_batch_size: int = 10
     require_llm: int = 1
 
 
@@ -673,7 +673,7 @@ def _llm_suggest_labels(texts: list[str], labels: list[str], model: str) -> list
         },
         method="POST",
     )
-    with urllib_request.urlopen(req, timeout=45) as resp:
+    with urllib_request.urlopen(req, timeout=90) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     content = payload["choices"][0]["message"]["content"]
     obj = json.loads(content)
@@ -711,8 +711,9 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
     label_col = args.get("label_col", "label")
     text_col = args.get("text_col", "text")
     doc_id_col = args.get("doc_id_col", "doc_id")
-    only_empty = int(args.get("only_empty", 1)) == 1
-    llm_model = args.get("llm_model", "gpt-4o-mini")
+    # Do not overwrite labels that already exist. This keeps reruns incremental.
+    only_empty = True
+    llm_model = args.get("llm_model", "gpt-4.1-mini")
     batch_docs = max(1, min(int(args.get("batch_docs", 10)), 50))
     llm_text_batch_size = max(1, min(int(args.get("llm_text_batch_size", 30)), 100))
     require_llm = int(args.get("require_llm", 1)) == 1
@@ -771,8 +772,6 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
                         )
                     )
                 except Exception as exc:
-                    if require_llm:
-                        raise RuntimeError(f"LLM labeling failed at batch {s//batch_docs + 1}: {exc}") from exc
                     strategy_used = "rule"
                     fallback_batch = [_suggest_label_from_text(x) for x in batch_texts[t : t + llm_text_batch_size]]
                     labels_out.extend(fallback_batch)
@@ -842,9 +841,10 @@ def labeling_auto_suggest(req: AutoSuggestLabelsRequest) -> dict[str, Any]:
 
     targets: list[int] = []
     texts: list[str] = []
+    effective_only_empty = True
     for i, row in enumerate(rows):
         old_label = str(row.get(req.label_col, "")).strip()
-        if req.only_empty and old_label:
+        if effective_only_empty and old_label:
             continue
         targets.append(i)
         texts.append(str(row.get(req.text_col, "") or ""))
@@ -879,6 +879,7 @@ def labeling_auto_suggest(req: AutoSuggestLabelsRequest) -> dict[str, Any]:
         "strategy_used": strategy_used,
         "llm_model": req.llm_model if strategy_used == "llm" else None,
         "label_col": req.label_col,
+        "only_empty_enforced": True,
         "labels": INVOICE_LABELS,
     }
 

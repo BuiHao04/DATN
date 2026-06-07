@@ -34,6 +34,50 @@ class GCNTrainingService:
         out_channels = max(max(s["y"]) for s in samples) + 1
         return in_channels, out_channels
 
+    def _load_init_checkpoint_compatible(
+        self,
+        model: InvoiceGCN,
+        init_checkpoint: str,
+        stage_name: str,
+    ) -> None:
+        state = torch.load(init_checkpoint, map_location="cpu")
+        model_state = model.state_dict()
+
+        filtered_state = {}
+        skipped_keys: list[str] = []
+        for key, value in state.items():
+            if key not in model_state:
+                skipped_keys.append(key)
+                continue
+            if tuple(value.shape) != tuple(model_state[key].shape):
+                skipped_keys.append(key)
+                continue
+            filtered_state[key] = value
+
+        load_result = model.load_state_dict(filtered_state, strict=False)
+        missing_keys = list(load_result.missing_keys)
+        unexpected_keys = list(load_result.unexpected_keys)
+
+        if skipped_keys:
+            logger.warning(
+                "[{}] Skip {} incompatible checkpoint tensors: {}",
+                stage_name,
+                len(skipped_keys),
+                ", ".join(skipped_keys),
+            )
+        if missing_keys:
+            logger.warning(
+                "[{}] Model parameters not initialized from checkpoint: {}",
+                stage_name,
+                ", ".join(missing_keys),
+            )
+        if unexpected_keys:
+            logger.warning(
+                "[{}] Unexpected checkpoint tensors ignored: {}",
+                stage_name,
+                ", ".join(unexpected_keys),
+            )
+
     def _run_epoch_train(self, model: InvoiceGCN, samples: list[dict], optimizer: torch.optim.Optimizer) -> float:
         model.train()
         total_loss = 0.0
@@ -115,7 +159,7 @@ class GCNTrainingService:
         model = InvoiceGCN(in_channels=in_channels, hidden_channels=64, out_channels=out_channels)
         if init_checkpoint:
             logger.info("[{}] Load init checkpoint: {}", stage_name, init_checkpoint)
-            model.load_state_dict(torch.load(init_checkpoint, map_location="cpu"))
+            self._load_init_checkpoint_compatible(model, init_checkpoint, stage_name)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
         ckpt = Path(checkpoint_path)

@@ -8,23 +8,34 @@ import threading
 import uuid
 import csv
 import re
+import sys
+import random
 from urllib import request as urllib_request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from pipeline.core.gcn_classifier import build_features
+from pipeline.core.graph_builder import build_graph_edges
+from pipeline.core.schema import OCRNode
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC_DIR = ROOT / "src"
 FRONTEND_DIR = ROOT / "app" / "frontend" / "dist"
 FRONTEND_FALLBACK_DIR = ROOT / "app" / "frontend"
 JOBS_FILE = ROOT / "app" / "jobs" / "jobs.json"
 STAGE_B_RAW_DIR = SRC_DIR / "data" / "stage_b_raw_images"
+ROOT_OUTPUTS_CHECKPOINTS_DIR = ROOT / "outputs" / "checkpoints"
+PYTHON_EXE = Path(sys.executable).resolve()
+CONDA_ENV_DIR = PYTHON_EXE.parent
 
 
 def _load_env_file() -> None:
@@ -117,6 +128,18 @@ class PreprocessDatasetRequest(BaseModel):
     min_nodes_per_graph: int = 1
 
 
+class SplitDatasetRequest(BaseModel):
+    input_json: str
+    output_train_json: str = "data/stage_b_train.json"
+    output_val_json: str = "data/stage_b_val.json"
+    output_test_json: str = "data/stage_b_test.json"
+    train_ratio: float = 0.7
+    val_ratio: float = 0.15
+    test_ratio: float = 0.15
+    seed: int = 42
+    shuffle: int = 1
+
+
 class ValidateLabelCsvRequest(BaseModel):
     input_csv: str
     label_col: str = "label"
@@ -168,7 +191,23 @@ class LabelingByDocRequest(BaseModel):
     label_col: str = "label"
     text_col: str = "text"
     doc_id_col: str = "doc_id"
-    limit_docs: int = 100
+    page: int = 1
+    page_size: int = 50
+
+
+class LabelingGraphInspectRequest(BaseModel):
+    input_csv: str
+    doc_id: str
+    label_col: str = "label"
+    text_col: str = "text"
+    doc_id_col: str = "doc_id"
+    score_col: str = "score"
+    x1_col: str = "x1"
+    y1_col: str = "y1"
+    x2_col: str = "x2"
+    y2_col: str = "y2"
+    same_line_ratio: float = 1.2
+    near_threshold: float = 250.0
 
 
 class PrepareOcrLabelingRequest(BaseModel):
@@ -291,14 +330,85 @@ def _write_csv_rows(csv_path: Path, fields: list[str], rows: list[dict[str, Any]
     tmp_path.replace(csv_path)
 
 
+def _resolve_project_path(path_str: str) -> Path:
+    normalized = str(path_str or "").replace("\\", "/").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Missing path")
+
+    candidates: list[Path] = []
+    rel_path = Path(normalized)
+    candidates.append((SRC_DIR / rel_path).resolve())
+    candidates.append((ROOT / rel_path).resolve())
+
+    src_root = str(SRC_DIR.resolve())
+    project_root = str(ROOT.resolve())
+    for candidate in candidates:
+        candidate_str = str(candidate)
+        if not (candidate_str.startswith(src_root) or candidate_str.startswith(project_root)):
+            continue
+        if candidate.exists():
+            return candidate
+
+    fallback = candidates[0]
+    fallback_str = str(fallback)
+    if fallback_str.startswith(src_root) or fallback_str.startswith(project_root):
+        return fallback
+    raise HTTPException(status_code=400, detail="Invalid path")
+
+
+def _build_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    path_parts: list[str] = []
+
+    for candidate in (
+        CONDA_ENV_DIR / "Library" / "bin",
+        CONDA_ENV_DIR / "DLLs",
+        CONDA_ENV_DIR / "Scripts",
+        CONDA_ENV_DIR,
+    ):
+        if candidate.exists():
+            path_parts.append(str(candidate))
+
+    existing_path = env.get("PATH", "")
+    if existing_path:
+        path_parts.append(existing_path)
+    env["PATH"] = os.pathsep.join(path_parts)
+    env["PYTHONHOME"] = ""
+    env["PYTHONPATH"] = str(SRC_DIR)
+    return env
+
+
+def _stage_b_image_index() -> list[Path]:
+    STAGE_B_RAW_DIR.mkdir(parents=True, exist_ok=True)
+    return [
+        p
+        for p in STAGE_B_RAW_DIR.rglob("*")
+        if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+    ]
+
+
+def _find_image_for_doc(doc_id: str, image_index: list[Path]) -> str | None:
+    did = doc_id.strip().lower()
+    exact = next((p for p in image_index if p.stem.lower() == did), None)
+    if exact:
+        return str(exact.relative_to(SRC_DIR))
+    fuzzy = next((p for p in image_index if did in p.stem.lower()), None)
+    if fuzzy:
+        return str(fuzzy.relative_to(SRC_DIR))
+    return None
+
+
 def _build_cmd(mode: str, args: dict[str, Any]) -> list[str]:
-    cmd = ["python", "pipeline_runner.py", mode]
+    cmd = [str(PYTHON_EXE), "pipeline_runner.py", mode]
     for key, value in args.items():
         if value is None or value == "":
             continue
         flag = "--" + key.replace("_", "-")
         cmd.append(flag)
-        cmd.append(str(value))
+        value_str = str(value).replace("\\", "/")
+        if value_str.startswith("outputs/"):
+            value_str = os.path.relpath(str((ROOT / value_str).resolve()), str(SRC_DIR)).replace("\\", "/")
+        cmd.append(value_str)
     return cmd
 
 
@@ -317,7 +427,7 @@ def _run_job(job_id: str, cmd: list[str]) -> None:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        env=os.environ.copy(),
+        env=_build_subprocess_env(),
     )
 
     log_lines: list[str] = []
@@ -482,6 +592,93 @@ def test_gcn(req: TestGcnRequest) -> dict[str, Any]:
 @app.post("/api/pipeline/preprocess-gcn-dataset")
 def preprocess_dataset(req: PreprocessDatasetRequest) -> dict[str, Any]:
     return _enqueue_job("preprocess_gcn_dataset", req.model_dump())
+
+
+@app.post("/api/pipeline/split-gcn-dataset")
+def split_gcn_dataset(req: SplitDatasetRequest) -> dict[str, Any]:
+    input_path = SRC_DIR / req.input_json
+    if not input_path.exists():
+        raise HTTPException(status_code=400, detail=f"Dataset JSON not found: {req.input_json}")
+
+    total_ratio = req.train_ratio + req.val_ratio + req.test_ratio
+    if total_ratio <= 0:
+        raise HTTPException(status_code=400, detail="Train/val/test ratios must sum to > 0")
+
+    data = json.loads(input_path.read_text(encoding="utf-8"))
+    samples = list(data.get("samples", []))
+    if not samples:
+        raise HTTPException(status_code=400, detail=f"Empty dataset: {req.input_json}")
+
+    if bool(req.shuffle):
+        rnd = random.Random(req.seed)
+        rnd.shuffle(samples)
+
+    train_ratio = req.train_ratio / total_ratio
+    val_ratio = req.val_ratio / total_ratio
+    test_ratio = req.test_ratio / total_ratio
+
+    total = len(samples)
+    n_train = int(total * train_ratio)
+    n_val = int(total * val_ratio)
+    n_test = total - n_train - n_val
+
+    if total >= 3:
+        if n_train <= 0:
+            n_train = 1
+        if req.val_ratio > 0 and n_val <= 0:
+            n_val = 1
+        n_test = total - n_train - n_val
+        if req.test_ratio > 0 and n_test <= 0:
+            n_test = 1
+            if n_train > 1:
+                n_train -= 1
+            elif n_val > 1:
+                n_val -= 1
+        while n_train + n_val + n_test > total:
+            if n_train >= n_val and n_train >= n_test and n_train > 1:
+                n_train -= 1
+            elif n_val >= n_test and n_val > 0:
+                n_val -= 1
+            elif n_test > 0:
+                n_test -= 1
+
+    train_samples = samples[:n_train]
+    val_samples = samples[n_train:n_train + n_val]
+    test_samples = samples[n_train + n_val:]
+
+    meta = dict(data.get("meta", {}))
+    meta["split_from"] = req.input_json
+    meta["split_seed"] = req.seed
+    meta["split_ratios"] = {
+        "train": req.train_ratio,
+        "val": req.val_ratio,
+        "test": req.test_ratio,
+    }
+
+    def write_split(path_str: str, split_name: str, split_samples: list[dict[str, Any]]) -> str:
+        out_path = SRC_DIR / path_str
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out = {
+            "meta": {**meta, "split": split_name, "num_graphs": len(split_samples)},
+            "samples": split_samples,
+        }
+        out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        return str(out_path.relative_to(SRC_DIR))
+
+    train_out = write_split(req.output_train_json, "train", train_samples)
+    val_out = write_split(req.output_val_json, "validation", val_samples)
+    test_out = write_split(req.output_test_json, "test", test_samples)
+
+    return {
+        "status": "ok",
+        "input_json": req.input_json,
+        "total_graphs": total,
+        "outputs": {
+            "train": {"path": train_out, "graphs": len(train_samples)},
+            "validation": {"path": val_out, "graphs": len(val_samples)},
+            "test": {"path": test_out, "graphs": len(test_samples)},
+        },
+    }
 
 
 @app.post("/api/pipeline/validate-label-csv")
@@ -973,30 +1170,134 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
             if len(slot["samples"]) < 8:
                 slot["samples"].append({"text": text, "label": label})
 
-    image_index: list[Path] = [
-        p
-        for p in STAGE_B_RAW_DIR.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
-    ]
-
-    def find_image_for_doc(doc_id: str) -> str | None:
-        did = doc_id.strip().lower()
-        exact = next((p for p in image_index if p.stem.lower() == did), None)
-        if exact:
-            return str(exact.relative_to(SRC_DIR))
-        fuzzy = next((p for p in image_index if did in p.stem.lower()), None)
-        if fuzzy:
-            return str(fuzzy.relative_to(SRC_DIR))
-        return None
-
-    docs = list(grouped.values())[: max(1, min(req.limit_docs, 500))]
+    image_index = _stage_b_image_index()
+    all_docs = list(grouped.values())
+    page_size = max(1, min(req.page_size, 200))
+    page = max(1, req.page)
+    total_docs = len(all_docs)
+    total_pages = max(1, (total_docs + page_size - 1) // page_size)
+    if page > total_pages:
+        page = total_pages
+    start = (page - 1) * page_size
+    end = start + page_size
+    docs = all_docs[start:end]
     for d in docs:
-        d["preview_path"] = find_image_for_doc(d["doc_id"])
+        d["preview_path"] = _find_image_for_doc(d["doc_id"], image_index)
 
     return {
         "input_csv": req.input_csv,
-        "total_docs": len(grouped),
+        "total_docs": total_docs,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
         "docs": docs,
+    }
+
+
+@app.post("/api/pipeline/labeling-graph-inspect")
+def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
+    csv_path = SRC_DIR / req.input_csv
+    if not csv_path.exists():
+        raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
+
+    doc_rows: list[dict[str, Any]] = []
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        fields = reader.fieldnames or []
+        for col in (
+            req.doc_id_col,
+            req.text_col,
+            req.label_col,
+            req.score_col,
+            req.x1_col,
+            req.y1_col,
+            req.x2_col,
+            req.y2_col,
+        ):
+            if col not in fields:
+                raise HTTPException(status_code=400, detail=f"Missing column: {col}")
+        for row_number, row in enumerate(reader, start=2):
+            doc_id = str(row.get(req.doc_id_col, "") or "").strip()
+            if doc_id == req.doc_id:
+                row["_row_number"] = row_number
+                doc_rows.append(row)
+
+    if not doc_rows:
+        raise HTTPException(status_code=404, detail=f"Doc not found: {req.doc_id}")
+
+    nodes: list[OCRNode] = []
+    labels: list[str] = []
+    row_numbers: list[int] = []
+    for row in doc_rows:
+        text = str(row.get(req.text_col, "") or "").strip()
+        if not text:
+            continue
+        x1 = float(row.get(req.x1_col, 0) or 0)
+        y1 = float(row.get(req.y1_col, 0) or 0)
+        x2 = float(row.get(req.x2_col, 0) or 0)
+        y2 = float(row.get(req.y2_col, 0) or 0)
+        score = float(row.get(req.score_col, 1.0) or 1.0)
+        if x2 < x1:
+            x1, x2 = x2, x1
+        if y2 < y1:
+            y1, y2 = y2, y1
+        w = max(x2 - x1, 1e-6)
+        h = max(y2 - y1, 1e-6)
+        nodes.append(
+            OCRNode(
+                text=text,
+                score=score,
+                x1=x1,
+                y1=y1,
+                x2=x2,
+                y2=y2,
+                cx=(x1 + x2) / 2.0,
+                cy=(y1 + y2) / 2.0,
+                w=w,
+                h=h,
+            )
+        )
+        labels.append(str(row.get(req.label_col, "") or "").strip())
+        row_numbers.append(int(row["_row_number"]))
+
+    features = build_features(nodes).tolist() if nodes else []
+    edges = build_graph_edges(nodes, same_line_ratio=req.same_line_ratio, near_threshold=req.near_threshold)
+    edge_index = [[], []]
+    adjacency = [[0 for _ in range(len(nodes))] for _ in range(len(nodes))]
+    for src, dst, dist in edges:
+        edge_index[0].append(src)
+        edge_index[1].append(dst)
+        adjacency[src][dst] = 1
+
+    image_index = _stage_b_image_index()
+    preview_path = _find_image_for_doc(req.doc_id, image_index)
+    feature_names = ["text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score"]
+    node_items = []
+    for i, node in enumerate(nodes):
+        node_items.append(
+            {
+                "node_index": i,
+                "row_number": row_numbers[i],
+                "text": node.text,
+                "label": labels[i],
+                "score": node.score,
+                "bbox": [node.x1, node.y1, node.x2, node.y2],
+                "features": features[i],
+            }
+        )
+
+    return {
+        "doc_id": req.doc_id,
+        "input_csv": req.input_csv,
+        "preview_path": preview_path,
+        "feature_names": feature_names,
+        "graph": {
+            "num_nodes": len(nodes),
+            "num_edges": len(edges),
+            "edge_index": edge_index,
+            "adjacency_matrix": adjacency,
+        },
+        "nodes": node_items,
     }
 
 
@@ -1083,6 +1384,27 @@ def list_files(dir: str) -> dict[str, Any]:
     return {"dir": dir, "count": len(files), "files": files}
 
 
+@app.get("/api/files/checkpoints")
+def list_checkpoint_files() -> dict[str, Any]:
+    files: list[str] = []
+    seen: set[str] = set()
+
+    for base_dir in (ROOT_OUTPUTS_CHECKPOINTS_DIR, SRC_DIR / "outputs" / "checkpoints"):
+        if not base_dir.exists() or not base_dir.is_dir():
+            continue
+        for p in sorted(base_dir.rglob("*")):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() not in {".pt", ".pth", ".bin"}:
+                continue
+            rel = str(p.relative_to(ROOT)).replace("\\", "/")
+            if rel not in seen:
+                seen.add(rel)
+                files.append(rel)
+
+    return {"count": len(files), "files": files}
+
+
 @app.post("/api/files/clear-stage-b-raw-images")
 def clear_stage_b_raw_images() -> dict[str, Any]:
     STAGE_B_RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -1110,9 +1432,20 @@ def clear_stage_b_raw_images() -> dict[str, Any]:
 
 @app.get("/api/files/image")
 def file_image(path: str) -> FileResponse:
-    target = (SRC_DIR / path).resolve()
-    if not str(target).startswith(str(SRC_DIR.resolve())):
-        raise HTTPException(status_code=400, detail="Invalid path")
+    target = _resolve_project_path(path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(str(target))
+
+
+@app.get("/api/files/json")
+def file_json(path: str) -> dict[str, Any]:
+    target = _resolve_project_path(path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="JSON file not found")
+    if target.suffix.lower() != ".json":
+        raise HTTPException(status_code=400, detail="Only .json files are supported")
+    try:
+        return json.loads(target.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON content: {exc}") from exc

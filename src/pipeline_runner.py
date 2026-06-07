@@ -5,16 +5,18 @@ from loguru import logger
 
 
 def cmd_gcn_infer(args: argparse.Namespace) -> None:
-    from pipeline.services.ocr_service import OCRService
     from pipeline.services.gcn_pipeline_service import GCNPipelineService
+    from pipeline.services.ocr_service import OCRService
 
-    ocr_service = OCRService()
     gcn_service = GCNPipelineService()
+    ocr_service = OCRService()
 
     nodes = ocr_service.run(args.image, lang=args.lang)
     ocr_service.save_debug_image(args.image, nodes, args.ocr_debug_image)
 
     result = gcn_service.infer(nodes, checkpoint_path=args.checkpoint)
+    result["image_path"] = args.image
+    result["ocr_boxes_image"] = args.ocr_debug_image
     gcn_service.save_result(result, args.output_json)
 
     logger.info("Saved GCN infer JSON: {}", args.output_json)

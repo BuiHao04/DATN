@@ -22,11 +22,47 @@ class GCNTrainingService:
     ]
     """
 
+    def __init__(self) -> None:
+        self.src_dir = Path(__file__).resolve().parents[2]
+        self.repo_dir = self.src_dir.parent
+
+    def _resolve_existing_path(self, path_value: str | None) -> str | None:
+        if not path_value:
+            return path_value
+        p = Path(path_value).expanduser()
+        if p.is_absolute():
+            return str(p)
+
+        candidates = [
+            Path.cwd() / p,
+            self.src_dir / p,
+            self.repo_dir / p,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate.resolve())
+
+        if p.parts and p.parts[0] == "src":
+            candidate = self.repo_dir / p
+            if candidate.exists():
+                return str(candidate.resolve())
+
+        return str((Path.cwd() / p).resolve())
+
+    def _resolve_output_path(self, path_value: str) -> str:
+        p = Path(path_value).expanduser()
+        if p.is_absolute():
+            return str(p)
+        if p.parts and p.parts[0] == "src":
+            return str((self.repo_dir / p).resolve())
+        return str((self.src_dir / p).resolve())
+
     def _load_samples(self, dataset_json_path: str) -> list[dict]:
-        data = json.loads(Path(dataset_json_path).read_text(encoding="utf-8"))
+        resolved_path = self._resolve_existing_path(dataset_json_path)
+        data = json.loads(Path(resolved_path).read_text(encoding="utf-8"))
         samples = data.get("samples", [])
         if not samples:
-            raise ValueError(f"Empty dataset: missing samples in {dataset_json_path}")
+            raise ValueError(f"Empty dataset: missing samples in {resolved_path}")
         return samples
 
     def _infer_shape(self, samples: list[dict]) -> tuple[int, int]:
@@ -40,7 +76,9 @@ class GCNTrainingService:
         init_checkpoint: str,
         stage_name: str,
     ) -> None:
-        state = torch.load(init_checkpoint, map_location="cpu")
+        resolved_path = self._resolve_existing_path(init_checkpoint)
+        logger.info("[{}] Resolved init checkpoint: {}", stage_name, resolved_path)
+        state = torch.load(resolved_path, map_location="cpu")
         model_state = model.state_dict()
 
         filtered_state = {}
@@ -152,6 +190,16 @@ class GCNTrainingService:
         val_dataset_json_path: str | None = None,
         early_stop_patience: int = 0,
     ) -> str:
+        dataset_json_path = self._resolve_existing_path(dataset_json_path)
+        val_dataset_json_path = self._resolve_existing_path(val_dataset_json_path) if val_dataset_json_path else None
+        checkpoint_path = self._resolve_output_path(checkpoint_path)
+        init_checkpoint = self._resolve_existing_path(init_checkpoint) if init_checkpoint else None
+
+        logger.info("[{}] Dataset train: {}", stage_name, dataset_json_path)
+        if val_dataset_json_path:
+            logger.info("[{}] Dataset val: {}", stage_name, val_dataset_json_path)
+        logger.info("[{}] Checkpoint out: {}", stage_name, checkpoint_path)
+
         samples = self._load_samples(dataset_json_path)
         val_samples = self._load_samples(val_dataset_json_path) if val_dataset_json_path else None
         in_channels, out_channels = self._infer_shape(samples)

@@ -9,7 +9,7 @@ import torch
 from pipeline.core.gcn_classifier import InvoiceGCN, build_edge_index, build_features, classify_nodes
 from pipeline.core.graph_builder import build_graph_edges
 from pipeline.core.postprocess import build_invoice_json
-from pipeline.core.schema import OCRNode
+from pipeline.core.schema import LABEL_MAP, OCRNode
 
 
 class GCNPipelineService:
@@ -54,16 +54,24 @@ class GCNPipelineService:
     def infer(self, nodes: list[OCRNode], checkpoint_path: str | None = None) -> dict[str, Any]:
         edges = build_graph_edges(nodes)
         x = build_features(nodes)
+        feature_names = ["text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score"]
+        rule_labels = classify_nodes(nodes, edges)
         if checkpoint_path:
             labels = self._classify_nodes_with_checkpoint(nodes, edges, checkpoint_path)
             classifier_mode = "trained_gcn_checkpoint"
         else:
-            labels = classify_nodes(nodes, edges)
+            labels = rule_labels
             classifier_mode = "rule_based_fallback"
         extracted = build_invoice_json(nodes, labels)
+        rule_extracted = build_invoice_json(nodes, rule_labels)
 
         node_features = []
         for i, n in enumerate(nodes):
+            neighbor_edges = [
+                {"target": int(dst), "weight": float(weight)}
+                for src, dst, weight in edges
+                if src == i
+            ]
             node_features.append(
                 {
                     "node_id": i,
@@ -73,6 +81,10 @@ class GCNPipelineService:
                     "width": float(n.w),
                     "height": float(n.h),
                     "confidence": float(n.score),
+                    "rule_label": LABEL_MAP.get(rule_labels[i], "OTHER"),
+                    "predicted_label": LABEL_MAP.get(labels[i], "OTHER"),
+                    "changed_by_gcn": LABEL_MAP.get(rule_labels[i], "OTHER") != LABEL_MAP.get(labels[i], "OTHER"),
+                    "neighbors": neighbor_edges,
                     "feature_vector": [float(v) for v in x[i].tolist()],
                 }
             )
@@ -80,6 +92,7 @@ class GCNPipelineService:
         graph_info = {
             "num_nodes": len(nodes),
             "num_edges": len(edges),
+            "feature_names": feature_names,
             "edges": [
                 {"source": int(src), "target": int(dst), "weight": float(weight)}
                 for src, dst, weight in edges
@@ -91,6 +104,10 @@ class GCNPipelineService:
             "classifier_mode": classifier_mode,
             "checkpoint_path": checkpoint_path,
             "graph": graph_info,
+            "rule_baseline": {
+                "mode": "rule_based_context_classifier",
+                **rule_extracted,
+            },
             "node_features": node_features,
             **extracted,
         }

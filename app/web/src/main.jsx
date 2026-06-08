@@ -123,8 +123,37 @@ body{margin:0;background:var(--bg);font-family:Inter,Segoe UI,Arial,sans-serif;c
 .image-card img{display:block;width:100%;max-height:420px;object-fit:contain;background:#f7f6fc}
 .scroll-table{max-height:320px;overflow:auto;border:1px solid #d4d1e0;border-radius:8px}
 .empty-state{padding:18px;border:1px dashed #d5d0e2;border-radius:10px;background:#fcfcff;color:#6b7280;font-size:13px}
+.review-shell{display:grid;grid-template-columns:300px 1.15fr .95fr;gap:12px;margin-top:10px}
+.review-pane{border:1px solid #d4d1e0;border-radius:12px;background:#fff;overflow:hidden}
+.review-pane-head{padding:10px 12px;border-bottom:1px solid #e8e5f0;background:#faf9ff}
+.review-pane-head h4{margin:0;font-size:15px}
+.review-pane-body{padding:10px 12px}
+.review-list{max-height:820px;overflow:auto}
+.review-image{position:relative;border:1px solid #ddd8ea;border-radius:12px;background:#f8f7fc;overflow:hidden}
+.review-image img{width:100%;display:block;max-height:680px;object-fit:contain;background:#f8f7fc}
+.review-overlay{position:absolute;inset:0}
+.review-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
+.review-kpi{border:1px solid #ddd8ea;border-radius:10px;background:#f9f8fe;padding:9px}
+.review-kpi .k{font-size:11px;color:#6b7280;margin-bottom:4px}.review-kpi .v{font-size:18px;font-weight:800}
+.node-filterbar{display:grid;grid-template-columns:1fr 160px 160px;gap:8px;margin-bottom:10px}
+.node-detail{border:1px solid #ddd8ea;border-radius:10px;background:#faf9ff;padding:10px;margin-bottom:10px}
+.node-detail-grid{display:grid;grid-template-columns:110px 1fr;gap:8px;font-size:12px}
+.node-detail-grid div{padding:4px 0;border-bottom:1px solid #ebe8f3}
+.node-detail-grid div:nth-last-child(-n+2){border-bottom:none}
+.chipline{display:flex;gap:6px;flex-wrap:wrap}
+.mini-chip{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#eef2ff;color:#3049b9;font-size:11px;font-weight:700;border:1px solid transparent}
+button.mini-chip{cursor:pointer}
+.mini-chip.active{background:#3049b9;color:#fff;border-color:#3049b9}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.compare-box{border:1px solid #d8d4e5;border-radius:10px;background:#fff;overflow:hidden}
+.compare-box h4{margin:0;padding:8px 10px;border-bottom:1px solid #e7e3ef;background:#faf9ff;font-size:12px}
+.compare-box .body{padding:10px}
+.explain-banner{border:1px solid #cfe1ff;background:linear-gradient(135deg,#f8fbff 0%,#eef4ff 100%);border-radius:12px;padding:12px}
+.explain-banner strong{display:block;margin-bottom:4px}
+.change-good{color:#166534;font-weight:700}
+.change-muted{color:#6b7280}
 @media (max-width:1200px){.app{grid-template-columns:220px 1fr}.path{max-width:260px}}
-@media (max-width:1100px){.cards,.split,.inspect-grid,.doc-browser,.inspect-layout,.hero-train,.field-grid,.preset-grid,.doc-toolbar,.doc-pager,.results-grid,.metrics-grid,.image-compare,.kv{grid-template-columns:1fr}}
+@media (max-width:1100px){.cards,.split,.inspect-grid,.doc-browser,.inspect-layout,.hero-train,.field-grid,.preset-grid,.doc-toolbar,.doc-pager,.results-grid,.metrics-grid,.image-compare,.kv,.review-shell,.node-filterbar,.compare-grid{grid-template-columns:1fr}}
 `;
 
 const NAV = [["prep", "Chuẩn bị dữ liệu"],["train", "Huấn luyện"],["results", "Kết quả & Đánh giá"]];
@@ -149,6 +178,95 @@ const LABELS = [
   "PAYMENT_METHOD",
   "OTHER",
 ];
+
+const LABEL_TEXT = {
+  MERCHANT_NAME: "Tên cửa hàng",
+  MERCHANT_ADDRESS: "Địa chỉ cửa hàng",
+  MERCHANT_PHONE: "Số điện thoại",
+  TAX_CODE: "Mã số thuế",
+  INVOICE_ID: "Mã / số hóa đơn",
+  DATE: "Ngày",
+  TIME: "Giờ",
+  CASHIER: "Thu ngân / quầy",
+  ITEM_NAME: "Tên sản phẩm",
+  ITEM_QTY: "Số lượng",
+  ITEM_UNIT_PRICE: "Đơn giá",
+  ITEM_AMOUNT: "Thành tiền dòng",
+  SUBTOTAL: "Tạm tính",
+  SERVICE_FEE: "Phí dịch vụ",
+  DISCOUNT: "Giảm giá",
+  TAX_AMOUNT: "Tiền thuế",
+  TOTAL_AMOUNT: "Tổng thanh toán",
+  PAYMENT_METHOD: "Phương thức thanh toán",
+  OTHER: "Khác",
+};
+
+function labelText(v){
+  return LABEL_TEXT[v] || v || "Chưa gán";
+}
+
+const LABEL_COLORS = {
+  MERCHANT_NAME: {border:"#2563eb", fill:"rgba(37,99,235,.12)"},
+  MERCHANT_ADDRESS: {border:"#0f766e", fill:"rgba(15,118,110,.12)"},
+  MERCHANT_PHONE: {border:"#0891b2", fill:"rgba(8,145,178,.12)"},
+  TAX_CODE: {border:"#7c3aed", fill:"rgba(124,58,237,.12)"},
+  INVOICE_ID: {border:"#9333ea", fill:"rgba(147,51,234,.12)"},
+  DATE: {border:"#ea580c", fill:"rgba(234,88,12,.12)"},
+  TIME: {border:"#f97316", fill:"rgba(249,115,22,.12)"},
+  CASHIER: {border:"#db2777", fill:"rgba(219,39,119,.12)"},
+  ITEM_NAME: {border:"#16a34a", fill:"rgba(22,163,74,.12)"},
+  ITEM_QTY: {border:"#65a30d", fill:"rgba(101,163,13,.12)"},
+  ITEM_UNIT_PRICE: {border:"#ca8a04", fill:"rgba(202,138,4,.12)"},
+  ITEM_AMOUNT: {border:"#d97706", fill:"rgba(217,119,6,.12)"},
+  SUBTOTAL: {border:"#b45309", fill:"rgba(180,83,9,.12)"},
+  SERVICE_FEE: {border:"#c2410c", fill:"rgba(194,65,12,.12)"},
+  DISCOUNT: {border:"#dc2626", fill:"rgba(220,38,38,.12)"},
+  TAX_AMOUNT: {border:"#be123c", fill:"rgba(190,18,60,.12)"},
+  TOTAL_AMOUNT: {border:"#ef4444", fill:"rgba(239,68,68,.16)"},
+  PAYMENT_METHOD: {border:"#0284c7", fill:"rgba(2,132,199,.12)"},
+  OTHER: {border:"#64748b", fill:"rgba(100,116,139,.12)"},
+};
+
+function labelColor(label){
+  return LABEL_COLORS[label] || LABEL_COLORS.OTHER;
+}
+
+function isMoneyLike(text){
+  const t = String(text||"").trim().toLowerCase();
+  return /(\d[\d.,]{2,}|\b(vnd|vnđ|đ)\b)/i.test(t);
+}
+
+function isDateLike(text){
+  const t = String(text||"").trim();
+  return /\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b/.test(t);
+}
+
+function isTimeLike(text){
+  const t = String(text||"").trim();
+  return /\b\d{1,2}:\d{2}\b/.test(t);
+}
+
+function isPhoneLike(text){
+  const digits = String(text||"").replace(/\D/g,"");
+  return digits.length >= 9 && digits.length <= 11;
+}
+
+function isTaxCodeLike(text){
+  const digits = String(text||"").replace(/\D/g,"");
+  return digits.length === 10 || digits.length === 13 || digits.length === 14;
+}
+
+function reviewIssueForNode(node){
+  const text = String(node?.text||"").trim();
+  const label = String(node?.picked_label || node?.label || "").trim();
+  if(!label) return "Thiếu nhãn";
+  if(isDateLike(text) && label !== "DATE") return "Text giống ngày nhưng chưa gán Ngày";
+  if(isTimeLike(text) && label !== "TIME") return "Text giống giờ nhưng chưa gán Giờ";
+  if(isPhoneLike(text) && !["MERCHANT_PHONE","TAX_CODE","INVOICE_ID"].includes(label)) return "Text giống số điện thoại / mã nhưng nhãn chưa hợp lý";
+  if(isTaxCodeLike(text) && label === "OTHER") return "Text giống mã số thuế / mã hóa đơn nhưng đang là Khác";
+  if(isMoneyLike(text) && !["ITEM_UNIT_PRICE","ITEM_AMOUNT","SUBTOTAL","SERVICE_FEE","DISCOUNT","TAX_AMOUNT","TOTAL_AMOUNT","OTHER"].includes(label)) return "Text giống tiền nhưng nhãn chưa hợp lý";
+  return "";
+}
 
 const TRAIN_HELP = {
   dataset_json: "Đường dẫn file dataset JSON dùng để train. Nếu file này sai hoặc chưa tạo xong ở bước chuẩn bị dữ liệu thì train sẽ không chạy được.",
@@ -260,6 +378,10 @@ function App(){
   const [activeNodeIndex,setActiveNodeIndex]=useState(-1);
   const [imageNatural,setImageNatural]=useState({w:1,h:1});
   const [missingOnly,setMissingOnly]=useState(false);
+  const [reviewSearch,setReviewSearch]=useState("");
+  const [reviewNodeFilter,setReviewNodeFilter]=useState("all");
+  const [inferNodeFilter,setInferNodeFilter]=useState("all");
+  const [inferActiveNode,setInferActiveNode]=useState(-1);
   const [trainA,setTrainA]=useState({dataset_json:"data/stage_a_dataset.json",val_dataset_json:"",checkpoint:"outputs/checkpoints/gcn_stage_a.pt",init_checkpoint:"",epochs:30,lr:0.001,early_stop_patience:0});
   const [trainB,setTrainB]=useState({dataset_json:"data/stage_b_vi_dataset.json",val_dataset_json:"",base_checkpoint:"outputs/checkpoints/gcn_stage_a.pt",checkpoint:"outputs/checkpoints/gcn_stage_b.pt",epochs:20,lr:0.0005,early_stop_patience:0});
   const [trainFull,setTrainFull]=useState({stage_a_json:"data/stage_a_dataset.json",stage_b_json:"data/stage_b_vi_dataset.json",stage_a_ckpt:"outputs/checkpoints/gcn_stage_a.pt",stage_b_ckpt:"outputs/checkpoints/gcn_stage_b.pt",stage_a_epochs:30,stage_b_epochs:20,stage_a_lr:0.001,stage_b_lr:0.0005,init_checkpoint:"",eval_json:"",output_eval:"outputs/gcn_eval_report.json"});
@@ -342,6 +464,25 @@ function App(){
       loadInferReport();
     }
   },[inferJob?.id, inferJob?.status]);
+  useEffect(()=>{
+    if((graphInspect?.nodes||[]).length && activeNodeIndex < 0){
+      setActiveNodeIndex(graphInspect.nodes[0].node_index);
+    }
+  },[graphInspect?.doc_id]);
+  useEffect(()=>{
+    if(!graphInspect?.nodes?.length) return;
+    if(reviewNodeFilter==="all" || reviewNodeFilter==="missing" || reviewNodeFilter==="labeled") return;
+    const matched = graphInspect.nodes.find((node)=>{
+      const label = String(node.picked_label || node.label || "").trim() || "OTHER";
+      return label === reviewNodeFilter;
+    });
+    if(matched) setActiveNodeIndex(matched.node_index);
+  },[reviewNodeFilter, graphInspect?.doc_id]);
+  useEffect(()=>{
+    if((inferReport?.node_features||[]).length && inferActiveNode < 0){
+      setInferActiveNode(inferReport.node_features[0].node_id);
+    }
+  },[inferReport]);
   const statusClass=(s)=>s==="success"?"success":s==="failed"?"failed":s==="running"?"running":s==="queued"?"queued":"idle";
   const lastLog=(j)=>{if(!j) return "Chưa có log"; const t=(j.stderr||j.stdout||"").trim(); if(!t) return "Job đã tạo, đang chờ log..."; return t.split(/\r?\n/).slice(-25).join("\n");};
 
@@ -587,6 +728,71 @@ function App(){
       return true;
     });
   },[docView, docSearch, docFilter]);
+  const activeInspectNode = useMemo(
+    ()=> (graphInspect?.nodes||[]).find(n=>n.node_index===activeNodeIndex) || null,
+    [graphInspect, activeNodeIndex]
+  );
+  const reviewDocChecklist = useMemo(()=>{
+    const required = ["MERCHANT_NAME","DATE","TOTAL_AMOUNT"];
+    const present = new Set((graphInspect?.nodes||[]).map(n=>String(n.picked_label || n.label || "").trim()).filter(Boolean));
+    return required.map((label)=>({
+      label,
+      ok: present.has(label),
+    }));
+  },[graphInspect]);
+  const suspiciousNodes = useMemo(()=>{
+    return (graphInspect?.nodes||[]).map((node)=>({
+      ...node,
+      issue: reviewIssueForNode(node),
+    })).filter((node)=>node.issue);
+  },[graphInspect]);
+  const reviewNodesFiltered = useMemo(()=>{
+    const q = reviewSearch.trim().toLowerCase();
+    return (graphInspect?.nodes||[]).filter((node)=>{
+      const text = String(node.text||"").toLowerCase();
+      const label = String(node.picked_label||node.label||"");
+      const missing = !String(node.picked_label||"").trim();
+      const issue = reviewIssueForNode(node);
+      if(q && !text.includes(q) && !label.toLowerCase().includes(q)) return false;
+      if(reviewNodeFilter==="missing") return missing;
+      if(reviewNodeFilter==="labeled") return !missing;
+      if(reviewNodeFilter==="suspicious") return !!issue;
+      if(reviewNodeFilter==="money") return isMoneyLike(node.text);
+      if(reviewNodeFilter==="date") return isDateLike(node.text);
+      if(reviewNodeFilter!=="all") return label===reviewNodeFilter;
+      return true;
+    });
+  },[graphInspect, reviewSearch, reviewNodeFilter]);
+  const reviewImageNodes = useMemo(()=>{
+    return (graphInspect?.nodes||[]).filter((node)=>{
+      const label = String(node.picked_label || node.label || "").trim() || "OTHER";
+      const missing = !String(node.picked_label || "").trim();
+      const issue = reviewIssueForNode(node);
+      if(reviewNodeFilter==="missing") return missing;
+      if(reviewNodeFilter==="labeled") return !missing;
+      if(reviewNodeFilter==="suspicious") return !!issue;
+      if(reviewNodeFilter==="money") return isMoneyLike(node.text);
+      if(reviewNodeFilter==="date") return isDateLike(node.text);
+      if(reviewNodeFilter!=="all") return label===reviewNodeFilter;
+      return true;
+    });
+  },[graphInspect, reviewNodeFilter]);
+  const nextMissingNode = useMemo(
+    ()=> (graphInspect?.nodes||[]).find((n)=>!String(n.picked_label||"").trim()) || null,
+    [graphInspect]
+  );
+  const nextSuspiciousNode = useMemo(
+    ()=> (graphInspect?.nodes||[]).find((n)=>!!reviewIssueForNode(n)) || null,
+    [graphInspect]
+  );
+  const inspectLabelSummary = useMemo(()=>{
+    const counts = {};
+    for(const node of (graphInspect?.nodes||[])){
+      const key = String(node.picked_label || node.label || "").trim() || "OTHER";
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    return Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  },[graphInspect]);
   const trainRunning = [trainAJob, trainBJob, trainFullJob].some(j=>j?.status==="running" || j?.status==="queued");
   const trainDoneCount = [trainAJob, trainBJob, trainFullJob].filter(j=>j?.status==="success").length;
   const trainFailCount = [trainAJob, trainBJob, trainFullJob].filter(j=>j?.status==="failed").length;
@@ -625,6 +831,26 @@ function App(){
     const inv = inferReport?.invoice || {};
     return Object.entries(inv);
   },[inferReport]);
+  const inferRuleRows = useMemo(()=>{
+    const inv = inferReport?.rule_baseline?.invoice || {};
+    return Object.entries(inv);
+  },[inferReport]);
+  const inferNodes = useMemo(()=>{
+    const baseNodes = inferReport?.node_features || [];
+    return baseNodes.filter((node)=>{
+      if(inferNodeFilter==="changed") return !!node.changed_by_gcn;
+      if(inferNodeFilter==="money") return Number(node.feature_vector?.[2] || 0) > 0;
+      return true;
+    });
+  },[inferReport, inferNodeFilter]);
+  const inferActiveNodeData = useMemo(
+    ()=> (inferReport?.node_features || []).find(n=>n.node_id===inferActiveNode) || null,
+    [inferReport, inferActiveNode]
+  );
+  const inferChangedCount = useMemo(
+    ()=> (inferReport?.node_features || []).filter(n=>n.changed_by_gcn).length,
+    [inferReport]
+  );
 
   return <>
     <style>{css}</style>
@@ -918,7 +1144,7 @@ function App(){
             <div className="step"><div className="step-head"><h3>Output API mới nhất</h3><span className="badge idle">READY</span></div><div className="step-body"><div className="term"><h4>APPLICATION/JSON</h4><pre>{out||"Chưa có phản hồi API"}</pre></div></div></div>
           </> : page==="results" ? <>
             <h2 className="title">Kết quả & Đánh giá</h2>
-            <div className="subtitle">Màn này dành cho 2 việc sau huấn luyện: chạy toàn bộ tập test để xem chỉ số thật, và infer một ảnh lẻ để xem model đang trích xuất trường nào, gán nhãn gì, OCR ra sao.</div>
+            <div className="subtitle">Màn này dành cho 2 việc sau huấn luyện: chạy tập test để xem chỉ số thật, và infer một ảnh lẻ để thấy rõ GCN đã dùng graph như thế nào để sửa hoặc giữ nhãn so với rule/OCR cơ bản.</div>
 
             <div className="cards">
               <div className="card"><div className="k">Job đánh giá</div><div className="v">{stageBTestJob?1:0}</div></div>
@@ -1046,6 +1272,10 @@ function App(){
                       <div className="empty-state">Chưa có kết quả infer. Hãy chọn ảnh, chọn checkpoint rồi bấm `Chạy infer ảnh này`.</div>
                     ) : (
                       <>
+                        <div className="explain-banner">
+                          <strong>GCN đang giúp ở đâu?</strong>
+                          <div className="tiny">GCN không chỉ nhìn từng text OCR riêng lẻ. Nó còn nhìn quan hệ giữa các node gần nhau trong graph. Ở ảnh này, có <span className="change-good">{inferChangedCount} node</span> đã được đổi nhãn so với baseline rule-based.</div>
+                        </div>
                         <div className="image-compare">
                           <div className="image-card">
                             <h4>Ảnh gốc</h4>
@@ -1060,41 +1290,90 @@ function App(){
                           <div className="card"><div className="k">Classifier mode</div><div className="v" style={{fontSize:14}}>{shortName(inferReport.classifier_mode||"-")}</div></div>
                           <div className="card"><div className="k">Số node OCR</div><div className="v">{inferReport.graph?.num_nodes||0}</div></div>
                           <div className="card"><div className="k">Số cạnh graph</div><div className="v">{inferReport.graph?.num_edges||0}</div></div>
-                          <div className="card"><div className="k">Checkpoint</div><div className="v" style={{fontSize:14}}>{shortName(inferReport.checkpoint_path||"-")}</div></div>
+                          <div className="card"><div className="k">Node bị GCN đổi nhãn</div><div className="v">{inferChangedCount}</div></div>
                         </div>
                         <div className="step" style={{marginTop:10}}>
-                          <div className="step-head"><h3>Trường trích xuất</h3></div>
+                          <div className="step-head"><h3>So sánh trước và sau GCN</h3></div>
                           <div className="step-body">
-                            <div className="kv">
-                              {inferInvoiceRows.map(([k,v])=>(
-                                <React.Fragment key={k}>
-                                  <div>{k}</div>
-                                  <div>{Array.isArray(v) ? v.join(" | ") : String(v ?? "-")}</div>
-                                </React.Fragment>
-                              ))}
+                            <div className="compare-grid">
+                              <div className="compare-box">
+                                <h4>Baseline rule/OCR</h4>
+                                <div className="body">
+                                  <div className="kv">
+                                    {inferRuleRows.map(([k,v])=>(
+                                      <React.Fragment key={k}>
+                                        <div>{k}</div>
+                                        <div>{Array.isArray(v) ? v.join(" | ") : String(v ?? "-")}</div>
+                                      </React.Fragment>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="compare-box">
+                                <h4>Kết quả cuối sau GCN</h4>
+                                <div className="body">
+                                  <div className="kv">
+                                    {inferInvoiceRows.map(([k,v])=>(
+                                      <React.Fragment key={k}>
+                                        <div>{k}</div>
+                                        <div>{Array.isArray(v) ? v.join(" | ") : String(v ?? "-")}</div>
+                                      </React.Fragment>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
                         <div className="step" style={{marginTop:10}}>
-                          <div className="step-head"><h3>Node OCR và nhãn model gán</h3></div>
+                          <div className="step-head"><h3>Node OCR, feature và nhãn model gán</h3></div>
                           <div className="step-body">
+                            <div className="actions" style={{marginBottom:10}}>
+                              <select className="input" style={{maxWidth:220}} value={inferNodeFilter} onChange={e=>setInferNodeFilter(e.target.value)}>
+                                <option value="all">Tất cả node</option>
+                                <option value="changed">Chỉ node bị GCN đổi nhãn</option>
+                                <option value="money">Chỉ node có dấu hiệu tiền</option>
+                              </select>
+                              <div className="tiny">Feature graph: {(inferReport.graph?.feature_names || []).join(", ")}</div>
+                            </div>
+                            {inferActiveNodeData ? (
+                              <div className="node-detail">
+                                <div style={{fontWeight:800, marginBottom:8}}>Node đang xem: #{inferActiveNodeData.node_id}</div>
+                                <div className="node-detail-grid">
+                                  <div>OCR text</div><div>{inferActiveNodeData.text}</div>
+                                  <div>Baseline rule</div><div>{labelText(inferActiveNodeData.rule_label)}</div>
+                                  <div>Nhãn sau GCN</div><div>{labelText(inferActiveNodeData.predicted_label)}</div>
+                                  <div>GCN có đổi không?</div><div>{inferActiveNodeData.changed_by_gcn ? "Có, GCN đã đổi nhãn" : "Không, GCN giữ nguyên"}</div>
+                                  <div>Số hàng xóm graph</div><div>{(inferActiveNodeData.neighbors||[]).length}</div>
+                                  <div>Feature vector</div><div>{JSON.stringify(inferActiveNodeData.feature_vector || [])}</div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="empty-state" style={{marginBottom:10}}>Bấm vào một dòng bên dưới để xem node đó được baseline và GCN xử lý như thế nào.</div>
+                            )}
                             <div className="scroll-table">
                               <table className="tbl">
                                 <thead>
                                   <tr>
+                                    <th>Node</th>
                                     <th>Text</th>
-                                    <th>Nhãn</th>
+                                    <th>Rule</th>
+                                    <th>GCN</th>
+                                    <th>GCN đổi?</th>
                                     <th>Score OCR</th>
-                                    <th>BBox</th>
+                                    <th>Số hàng xóm</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {(inferReport.nodes||[]).map((row, idx)=>(
-                                    <tr key={idx}>
+                                  {inferNodes.map((row, idx)=>(
+                                    <tr key={idx} className={`node-row ${inferActiveNode===row.node_id?"active":""}`} onClick={()=>setInferActiveNode(row.node_id)}>
+                                      <td>{row.node_id}</td>
                                       <td>{row.text}</td>
-                                      <td>{row.label}</td>
-                                      <td>{Number(row.score||0).toFixed(3)}</td>
-                                      <td>{Array.isArray(row.bbox) ? row.bbox.map(v=>Number(v).toFixed(1)).join(", ") : ""}</td>
+                                      <td>{labelText(row.rule_label)}</td>
+                                      <td>{labelText(row.predicted_label)}</td>
+                                      <td className={row.changed_by_gcn ? "change-good" : "change-muted"}>{row.changed_by_gcn ? "Có" : "Không"}</td>
+                                      <td>{Number(row.confidence||0).toFixed(3)}</td>
+                                      <td>{(row.neighbors||[]).length}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -1173,14 +1452,12 @@ function App(){
               <div className="step-head"><h3>Bước 3: Hoàn tất nhãn và compile dataset</h3><span className={`badge ${statusClass(dsJob?.status)}`}>{(dsJob?.status||"idle").toUpperCase()}</span></div>
               <div className="step-body">
                 <div className="grid2"><input className="input" value={dataset.input_csv} onChange={e=>setDataset({...dataset,input_csv:e.target.value})}/><input className="input" value={dataset.output_json} onChange={e=>setDataset({...dataset,output_json:e.target.value})}/></div>
-                <div className="row" style={{gridTemplateColumns:"100px 90px auto auto auto auto auto 1fr",marginTop:8}}>
+                <div className="row" style={{gridTemplateColumns:"100px 90px auto auto auto auto 1fr",marginTop:8}}>
                   <input className="input" type="number" min="10" max="500" value={labelLimit} onChange={e=>setLabelLimit(e.target.value)} />
                   <input className="input" type="number" min="1" value={labelPage} onChange={e=>setLabelPage(e.target.value)} />
                   <button className="btn" onClick={()=>{setMissingOnly(false); loadLabelPreview();}}>Lấy dữ liệu</button>
                   <button className="btn" onClick={()=>{setMissingOnly(true); loadLabelPreview(1, true);}}>Xem dữ liệu thiếu nhãn</button>
-                  <button className="btn" onClick={()=>{const p=Math.max(1, Number(labelPage)-1); setLabelPage(p); loadLabelPreview(p, missingOnly);}}>Trang trước</button>
-                  <button className="btn" onClick={()=>{const p=Math.min(totalPages, Number(labelPage)+1); setLabelPage(p); loadLabelPreview(p, missingOnly);}}>Trang sau</button>
-                  <button className="btn" onClick={loadByDoc}>Xem theo ảnh</button>
+                  <button className="btn dark" onClick={()=>loadByDoc(1)}>Mở workspace theo ảnh</button>
                   <button className="btn" onClick={autoSuggestLabels}>AI gợi ý nhãn (batch 10 ảnh)</button>
                   <button className="btn" onClick={saveLabelUpdates}>Lưu nhãn</button>
                   <div className="tiny">Trang {labelPage}/{totalPages}. Bắt buộc: không được để rỗng cột label</div>
@@ -1191,9 +1468,13 @@ function App(){
                   {aiLabelJob?.status ? ` | Trạng thái: ${aiLabelJob.status}` : ""}
                 </div>
                 <div className="bar" style={{marginTop:4}}><div style={{width:`${aiLabelJob?.progress?.percent||0}%`}}/></div>
-                <div className="doc-browser">
-                  <div className="doc-list">
-                    <div className="doc-list-head">
+                <div className="review-shell">
+                  <div className="review-pane">
+                    <div className="review-pane-head">
+                      <h4>Danh sách hóa đơn để rà</h4>
+                      <div className="tiny">Trang {docPage}/{docTotalPages} | tổng {docTotal} ảnh</div>
+                    </div>
+                    <div className="review-pane-body">
                       <div className="doc-toolbar">
                         <input className="input" placeholder="Tìm theo doc id..." value={docSearch} onChange={e=>setDocSearch(e.target.value)} />
                         <select className="input" value={docFilter} onChange={e=>setDocFilter(e.target.value)}>
@@ -1202,24 +1483,14 @@ function App(){
                           <option value="labeled">Ảnh đã đủ nhãn</option>
                         </select>
                       </div>
-                      <div className="doc-pager">
+                      <div className="doc-pager" style={{marginTop:8}}>
                         <input className="input" type="number" min="10" max="100" value={docPageSize} onChange={e=>setDocPageSize(e.target.value)} />
                         <button className="btn" onClick={()=>loadByDoc(1)}>Tải danh sách ảnh</button>
                         <button className="btn" onClick={()=>{const p=Math.max(1, Number(docPage)-1); loadByDoc(p);}}>Trang trước</button>
                         <button className="btn" onClick={()=>{const p=Math.min(docTotalPages, Number(docPage)+1); loadByDoc(p);}}>Trang sau</button>
                       </div>
-                      <div className="doc-summary">
-                        <div>
-                          <strong>Trang {docPage}/{docTotalPages}</strong>
-                          <div className="doc-muted">Mỗi trang: {docPageSize} ảnh</div>
-                        </div>
-                        <div style={{textAlign:"right"}}>
-                          <strong>{filteredDocs.length}/{docView.length}</strong>
-                          <div className="doc-muted">ảnh đang hiển thị | tổng {docTotal}</div>
-                        </div>
-                      </div>
                     </div>
-                    <div className="doc-list-body">
+                    <div className="review-list">
                       {filteredDocs.map((doc)=>(
                         <div key={doc.doc_id} className={`doc-item ${graphInspect?.doc_id===doc.doc_id?"active":""}`} onClick={()=>openGraphInspect(doc.doc_id)}>
                           <div>
@@ -1228,120 +1499,112 @@ function App(){
                           <div className="doc-meta">
                             <div className="doc-id">{doc.doc_id}</div>
                             <div className="doc-sub">{doc.total_nodes || 0} node | thiếu nhãn: {doc.empty_labels || 0}</div>
-                            <div className="doc-sub">{Object.entries(doc.labels||{}).slice(0,3).map(([k,v])=>`${k}:${v}`).join(" | ")}</div>
+                            <div className="doc-sub">{Object.entries(doc.labels||{}).slice(0,2).map(([k,v])=>`${labelText(k)}:${v}`).join(" | ")}</div>
                           </div>
                           <div><span className={`badge ${Number(doc.empty_labels||0)>0?"queued":"success"}`}>{Number(doc.empty_labels||0)>0?"THIẾU":"OK"}</span></div>
                         </div>
                       ))}
-                      {filteredDocs.length===0 && <div className="tiny" style={{padding:12}}>Chưa có doc nào. Bấm `Xem theo ảnh` để tải danh sách ảnh từ CSV.</div>}
+                      {filteredDocs.length===0 && <div className="tiny" style={{padding:12}}>Chưa có ảnh nào. Bấm `Mở workspace theo ảnh` để tải dữ liệu từ CSV.</div>}
                     </div>
                   </div>
 
-                  <div className="inspect-panel">
-                    <div className="inspect-panel-head">
-                      <div className="inspect-title">
-                        <h4>Ảnh đang kiểm tra</h4>
-                        <div className="tiny">{graphInspect?.doc_id || "Chưa chọn ảnh nào"}</div>
-                      </div>
-                      <div className="inspect-tabs">
-                        <button className={`tab-btn ${inspectTab==="ocr"?"active":""}`} onClick={()=>setInspectTab("ocr")}>OCR & nhãn</button>
-                        <button className={`tab-btn ${inspectTab==="graph"?"active":""}`} onClick={()=>setInspectTab("graph")}>Graph train B</button>
-                        <button className="btn" onClick={saveInspectLabels} disabled={!graphInspect}>Lưu nhãn ảnh này</button>
+                  <div className="review-pane">
+                    <div className="review-pane-head">
+                      <h4>Hóa đơn đang kiểm tra</h4>
+                      <div className="chipline">
+                        <span className="mini-chip">{graphInspect?.doc_id || "Chưa chọn ảnh"}</span>
+                        <span className="mini-chip">{inspectTab==="ocr" ? "Chế độ rà nhãn" : "Chế độ graph train B"}</span>
                       </div>
                     </div>
-                    {graphInspectLoading ? (
-                      <div className="step-body"><div className="tiny">Đang tải chi tiết ảnh, OCR và graph...</div></div>
-                    ) : !graphInspect ? (
-                      <div className="step-body"><div className="tiny">Chọn một ảnh ở cột bên trái để xem OCR, nhãn và graph.</div></div>
-                    ) : inspectTab==="ocr" ? (
-                      <div className="inspect-layout">
-                        <div className="inspect-side">
-                          <div className="image-stage">
-                            {graphInspect.preview_path ? (
-                              <>
-                                <img
-                                  src={`/api/files/image?path=${encodeURIComponent(graphInspect.preview_path)}`}
-                                  alt={graphInspect.doc_id}
-                                  onLoad={(e)=>setImageNatural({w:e.target.naturalWidth||1,h:e.target.naturalHeight||1})}
-                                />
-                                {(graphInspect.nodes||[]).map((node)=>(
-                                  <div
-                                    key={`box-${node.node_index}`}
-                                    className={`ocr-box ${activeNodeIndex===node.node_index?"active":""}`}
-                                    style={{
-                                      left:`${((node.bbox?.[0]||0)/imageNatural.w)*100}%`,
-                                      top:`${((node.bbox?.[1]||0)/imageNatural.h)*100}%`,
-                                      width:`${(((node.bbox?.[2]||0)-(node.bbox?.[0]||0))/imageNatural.w)*100}%`,
-                                      height:`${(((node.bbox?.[3]||0)-(node.bbox?.[1]||0))/imageNatural.h)*100}%`
+                    <div className="review-pane-body">
+                      {graphInspectLoading ? (
+                        <div className="empty-state">Đang tải ảnh, node OCR và graph...</div>
+                      ) : !graphInspect ? (
+                        <div className="empty-state">Chọn một hóa đơn ở cột bên trái để bắt đầu rà nhãn theo ảnh.</div>
+                      ) : (
+                        <>
+                          <div className="actions" style={{marginBottom:10}}>
+                            <button className={`tab-btn ${inspectTab==="ocr"?"active":""}`} onClick={()=>setInspectTab("ocr")}>Rà nhãn theo ảnh</button>
+                            <button className={`tab-btn ${inspectTab==="graph"?"active":""}`} onClick={()=>setInspectTab("graph")}>Xem graph train B</button>
+                            <button className="btn" onClick={()=>nextMissingNode && setActiveNodeIndex(nextMissingNode.node_index)} disabled={!nextMissingNode}>Tới node thiếu nhãn</button>
+                            <button className="btn" onClick={()=>nextSuspiciousNode && setActiveNodeIndex(nextSuspiciousNode.node_index)} disabled={!nextSuspiciousNode}>Tới node nghi ngờ</button>
+                            <button className="btn" onClick={saveInspectLabels}>Lưu nhãn ảnh này</button>
+                          </div>
+                          {inspectTab==="ocr" ? (
+                            <>
+                              <div className="review-image">
+                                {graphInspect.preview_path ? (
+                                  <>
+                                    <img
+                                      src={`/api/files/image?path=${encodeURIComponent(graphInspect.preview_path)}`}
+                                      alt={graphInspect.doc_id}
+                                      onLoad={(e)=>setImageNatural({w:e.target.naturalWidth||1,h:e.target.naturalHeight||1})}
+                                    />
+                                    <div className="review-overlay">
+                                      {reviewImageNodes.map((node)=>(
+                                        <div
+                                          key={`box-${node.node_index}`}
+                                          className={`ocr-box ${activeNodeIndex===node.node_index?"active":""}`}
+                                          style={{
+                                            left:`${((node.bbox?.[0]||0)/imageNatural.w)*100}%`,
+                                            top:`${((node.bbox?.[1]||0)/imageNatural.h)*100}%`,
+                                            width:`${(((node.bbox?.[2]||0)-(node.bbox?.[0]||0))/imageNatural.w)*100}%`,
+                                            height:`${(((node.bbox?.[3]||0)-(node.bbox?.[1]||0))/imageNatural.h)*100}%`,
+                                            borderColor: activeNodeIndex===node.node_index ? "#ef4444" : labelColor(String(node.picked_label || node.label || "").trim() || "OTHER").border,
+                                            background: activeNodeIndex===node.node_index ? "rgba(239,68,68,.12)" : labelColor(String(node.picked_label || node.label || "").trim() || "OTHER").fill,
+                                          }}
+                                          title={`${node.node_index}: ${node.text}`}
+                                          onClick={()=>setActiveNodeIndex(node.node_index)}
+                                        />
+                                      ))}
+                                    </div>
+                                  </>
+                                ) : <div className="empty-state">Không có ảnh preview.</div>}
+                              </div>
+                              <div className="review-kpis">
+                                <div className="review-kpi"><div className="k">Số node OCR</div><div className="v">{graphInspect.graph?.num_nodes || 0}</div></div>
+                                <div className="review-kpi"><div className="k">Số node chưa gán</div><div className="v">{(graphInspect.nodes||[]).filter(n=>!String(n.picked_label||"").trim()).length}</div></div>
+                                <div className="review-kpi"><div className="k">Số cạnh graph</div><div className="v">{graphInspect.graph?.num_edges || 0}</div></div>
+                              </div>
+                              <div className="chipline" style={{marginTop:10}}>
+                                {reviewDocChecklist.map((item)=>(
+                                  <span key={item.label} className={`badge ${item.ok ? "success" : "failed"}`}>{labelText(item.label)}: {item.ok ? "OK" : "Thiếu"}</span>
+                                ))}
+                                {suspiciousNodes.length>0 ? <span className="badge failed">Nghi ngờ: {suspiciousNodes.length}</span> : <span className="badge success">Không thấy node nghi ngờ</span>}
+                              </div>
+                              <div className="chipline" style={{marginTop:10}}>
+                                <button className={`mini-chip ${reviewNodeFilter==="all"?"active":""}`} onClick={()=>setReviewNodeFilter("all")}>Tất cả</button>
+                                <button className={`mini-chip ${reviewNodeFilter==="missing"?"active":""}`} onClick={()=>setReviewNodeFilter(reviewNodeFilter==="missing" ? "all" : "missing")}>Thiếu nhãn</button>
+                                <button className={`mini-chip ${reviewNodeFilter==="suspicious"?"active":""}`} onClick={()=>setReviewNodeFilter(reviewNodeFilter==="suspicious" ? "all" : "suspicious")}>Nghi ngờ sai</button>
+                                <button className={`mini-chip ${reviewNodeFilter==="money"?"active":""}`} onClick={()=>setReviewNodeFilter(reviewNodeFilter==="money" ? "all" : "money")}>Giống tiền</button>
+                                <button className={`mini-chip ${reviewNodeFilter==="date"?"active":""}`} onClick={()=>setReviewNodeFilter(reviewNodeFilter==="date" ? "all" : "date")}>Giống ngày</button>
+                                {inspectLabelSummary.slice(0,6).map(([label,count])=>(
+                                  <button
+                                    key={label}
+                                    className={`mini-chip ${reviewNodeFilter===label?"active":""}`}
+                                    onClick={()=>{
+                                      setReviewNodeFilter(reviewNodeFilter===label ? "all" : label);
+                                      setReviewSearch("");
                                     }}
-                                    title={`${node.node_index}: ${node.text}`}
-                                    onClick={()=>setActiveNodeIndex(node.node_index)}
-                                  />
+                                  >
+                                    {labelText(label)}: {count}
+                                  </button>
                                 ))}
-                              </>
-                            ) : (
-                              <div className="step-body tiny">Không có ảnh preview.</div>
-                            )}
-                          </div>
-                          <div className="stats">
-                            <div className="stat"><div className="k">Số node</div><div className="v">{graphInspect.graph?.num_nodes || 0}</div></div>
-                            <div className="stat"><div className="k">Số cạnh</div><div className="v">{graphInspect.graph?.num_edges || 0}</div></div>
-                            <div className="stat"><div className="k">Thiếu nhãn</div><div className="v">{(graphInspect.nodes||[]).filter(n=>!String(n.picked_label||"").trim()).length}</div></div>
-                          </div>
-                          <div className="tiny">Bấm vào box trên ảnh hoặc vào từng dòng OCR ở bảng bên phải để kiểm tra và sửa nhãn.</div>
-                        </div>
-                        <div className="inspect-side">
-                          <div className="table-wrap" style={{maxHeight:760}}>
-                            <table className="tbl">
-                              <thead>
-                                <tr>
-                                  <th style={{width:60}}>Node</th>
-                                  <th style={{width:70}}>Dòng</th>
-                                  <th>Nội dung OCR trích xuất</th>
-                                  <th style={{width:180}}>Nhãn hiện tại</th>
-                                  <th style={{width:90}}>Score</th>
-                                  <th style={{width:220}}>BBox</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {(graphInspect.nodes||[]).map((node)=>(
-                                  <tr key={node.node_index} className={`node-row ${activeNodeIndex===node.node_index?"active":""}`} onClick={()=>setActiveNodeIndex(node.node_index)}>
-                                    <td>{node.node_index}</td>
-                                    <td>{node.row_number}</td>
-                                    <td>{node.text}</td>
-                                    <td>
-                                      <select className="input" value={node.picked_label||""} onChange={e=>setGraphInspect(prev=>({...prev,nodes:prev.nodes.map(x=>x.node_index===node.node_index?{...x,picked_label:e.target.value}:x)}))}>
-                                        <option value="">-- chọn nhãn --</option>
-                                        {allowedLabels.map(lb=><option key={lb} value={lb}>{lb}</option>)}
-                                      </select>
-                                    </td>
-                                    <td>{Number(node.score || 0).toFixed(3)}</td>
-                                    <td>{Array.isArray(node.bbox) ? node.bbox.map(v=>Number(v).toFixed(1)).join(", ") : ""}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="inspect-layout">
-                        <div className="inspect-side">
-                          {graphInspect.preview_path ? <img className="inspect-preview" src={`/api/files/image?path=${encodeURIComponent(graphInspect.preview_path)}`} alt={graphInspect.doc_id}/> : <div className="step-body tiny">Không có ảnh preview.</div>}
-                          <div className="stats">
-                            <div className="stat"><div className="k">Số node</div><div className="v">{graphInspect.graph?.num_nodes || 0}</div></div>
-                            <div className="stat"><div className="k">Số cạnh</div><div className="v">{graphInspect.graph?.num_edges || 0}</div></div>
-                            <div className="stat"><div className="k">Số feature</div><div className="v">{(graphInspect.feature_names || []).length}</div></div>
-                          </div>
-                          <div className="step"><div className="step-head"><h3>Tên các feature</h3></div><div className="step-body"><div className="tiny">{(graphInspect.feature_names || []).join(", ") || "Không có feature"}</div></div></div>
-                          <div className="step"><div className="step-head"><h3>Edge index</h3></div><div className="step-body"><div className="term"><h4>EDGE_INDEX</h4><pre>{JSON.stringify(graphInspect.graph?.edge_index || [[],[]], null, 2)}</pre></div></div></div>
-                        </div>
-                        <div className="inspect-side">
-                          <div className="step">
-                            <div className="step-head"><h3>Ma trận kề graph</h3></div>
-                            <div className="step-body">
-                              <div className="tiny">Đây là adjacency matrix build từ các OCR node của ảnh này, tức dữ liệu graph thật để đưa vào bước train B.</div>
-                              <div className="table-wrap" style={{maxHeight:520, marginTop:8}}>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="review-kpis">
+                                <div className="review-kpi"><div className="k">Số node</div><div className="v">{graphInspect.graph?.num_nodes || 0}</div></div>
+                                <div className="review-kpi"><div className="k">Số cạnh</div><div className="v">{graphInspect.graph?.num_edges || 0}</div></div>
+                                <div className="review-kpi"><div className="k">Số feature</div><div className="v">{(graphInspect.feature_names || []).length}</div></div>
+                              </div>
+                              <div className="node-detail" style={{marginTop:10}}>
+                                <div style={{fontWeight:800, marginBottom:6}}>Dữ liệu graph sẽ đi vào train B</div>
+                                <div className="tiny">Feature đang dùng: {(graphInspect.feature_names || []).join(", ") || "Không có feature"}.</div>
+                              </div>
+                              <div className="term"><h4>EDGE_INDEX</h4><pre>{JSON.stringify(graphInspect.graph?.edge_index || [[],[]], null, 2)}</pre></div>
+                              <div className="table-wrap" style={{maxHeight:360, marginTop:10}}>
                                 <table className="tbl">
                                   <thead>
                                     <tr>
@@ -1359,12 +1622,82 @@ function App(){
                                   </tbody>
                                 </table>
                               </div>
-                              <div className="matrix-note">Ma trận này không còn nằm ở ngoài màn nữa. Chỉ mở khi bạn thật sự cần kiểm tra dữ liệu graph cho train B.</div>
-                            </div>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="review-pane">
+                    <div className="review-pane-head">
+                      <h4>Node OCR và nhãn của hóa đơn này</h4>
+                    </div>
+                    <div className="review-pane-body">
+                      {!graphInspect ? (
+                        <div className="empty-state">Chưa có hóa đơn nào được chọn.</div>
+                      ) : (
+                        <>
+                          <div className="node-filterbar">
+                            <input className="input" placeholder="Lọc theo text hoặc mã nhãn..." value={reviewSearch} onChange={e=>setReviewSearch(e.target.value)} />
+                            <select className="input" value={reviewNodeFilter} onChange={e=>setReviewNodeFilter(e.target.value)}>
+                              <option value="all">Tất cả node</option>
+                              <option value="missing">Chỉ node thiếu nhãn</option>
+                              <option value="labeled">Chỉ node đã có nhãn</option>
+                              <option value="suspicious">Chỉ node nghi ngờ sai nhãn</option>
+                              <option value="money">Chỉ node giống tiền</option>
+                              <option value="date">Chỉ node giống ngày</option>
+                              {allowedLabels.map(lb=><option key={lb} value={lb}>{labelText(lb)}</option>)}
+                            </select>
+                            <button className="btn" onClick={()=>{setReviewSearch(""); setReviewNodeFilter("missing");}}>Lọc node thiếu nhãn</button>
                           </div>
-                        </div>
-                      </div>
-                    )}
+                          {activeInspectNode ? (
+                            <div className="node-detail">
+                              <div style={{fontWeight:800, marginBottom:8}}>Node đang chọn: #{activeInspectNode.node_index}</div>
+                              <div className="node-detail-grid">
+                                <div>OCR text</div><div>{activeInspectNode.text}</div>
+                                <div>Dòng CSV</div><div>{activeInspectNode.row_number}</div>
+                                <div>Score OCR</div><div>{Number(activeInspectNode.score||0).toFixed(3)}</div>
+                                <div>BBox</div><div>{Array.isArray(activeInspectNode.bbox) ? activeInspectNode.bbox.map(v=>Number(v).toFixed(1)).join(", ") : ""}</div>
+                                <div>Nhãn hiện tại</div><div>{labelText(activeInspectNode.picked_label || activeInspectNode.label)}</div>
+                                <div>Cờ kiểm tra nhanh</div><div>{reviewIssueForNode(activeInspectNode) || "Không thấy dấu hiệu bất thường rõ ràng"}</div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="empty-state" style={{marginBottom:10}}>Bấm vào box trên ảnh hoặc một dòng OCR bên dưới để xem chi tiết node đó.</div>
+                          )}
+                          <div className="table-wrap" style={{maxHeight:760}}>
+                            <table className="tbl">
+                              <thead>
+                                <tr>
+                                  <th style={{width:56}}>Node</th>
+                                  <th style={{width:70}}>Dòng</th>
+                                  <th>Nội dung OCR trích xuất</th>
+                                  <th style={{width:180}}>Nhãn</th>
+                                  <th style={{width:88}}>Score</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {reviewNodesFiltered.map((node)=>(
+                                  <tr key={node.node_index} className={`node-row ${activeNodeIndex===node.node_index?"active":""}`} onClick={()=>setActiveNodeIndex(node.node_index)}>
+                                    <td>{node.node_index}</td>
+                                    <td>{node.row_number}</td>
+                                    <td>{node.text}</td>
+                                    <td>
+                                      <select className="input" value={node.picked_label||""} onChange={e=>setGraphInspect(prev=>({...prev,nodes:prev.nodes.map(x=>x.node_index===node.node_index?{...x,picked_label:e.target.value}:x)}))}>
+                                        <option value="">-- chọn nhãn --</option>
+                                        {allowedLabels.map(lb=><option key={lb} value={lb}>{labelText(lb)}</option>)}
+                                      </select>
+                                    </td>
+                                    <td>{Number(node.score || 0).toFixed(3)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="row" style={{gridTemplateColumns:"1fr auto",marginTop:10}}><div className="tiny">POST /api/pipeline/preprocess-gcn-dataset</div><button className="btn dark" onClick={runDatasetCompile}>Compile dataset</button></div>

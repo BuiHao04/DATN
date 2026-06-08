@@ -22,9 +22,35 @@ cd <project_dir>\src
 pip install -r requirements.txt
 ```
 
+## Kha nang chay tren Windows va Linux
+
+Code hien tai da duoc sua theo huong de chay on hon tren ca Windows va Linux/WSL:
+
+- Dung `pathlib` de xu ly duong dan thay vi hard-code slash.
+- Backend goi subprocess bang chinh `python` cua env dang chay.
+- Backend tu them `src` vao `PYTHONPATH` khi spawn job.
+- Luong infer GCN tren Windows da doi thu tu import de tranh loi `torch shm.dll` khi dung chung voi PaddleOCR.
+
+Tuy vay, 3 thu vien sau van phu thuoc manh vao tung may:
+
+1. `torch`
+2. `torch-geometric`
+3. `paddlepaddle`
+
+Neu chay tren may Linux khac hoac Windows khac ma `pip install -r src/requirements.txt` khong thanh cong, thi nen cai rieng 3 goi nay theo dung:
+
+- version Python
+- CPU hay GPU
+- version CUDA
+- he dieu hanh
+
+Con lai cac thu vien khac trong repo la tuong doi an toan va cross-platform hon.
+
 ## Chay Frontend + Backend
 
 ### 1) Cai dat dependencies
+
+Windows PowerShell:
 
 ```powershell
 cd C:\Users\PC\Documents\datn_hao\DATN
@@ -33,7 +59,18 @@ pip install -r app\requirements-web.txt
 pip install -r src\requirements.txt
 ```
 
+Linux / WSL:
+
+```bash
+cd /path/to/DATN
+source <your_env>/bin/activate
+pip install -r app/requirements-web.txt
+pip install -r src/requirements.txt
+```
+
 ### 2) Build Frontend (React -> static files)
+
+Windows PowerShell:
 
 ```powershell
 cd C:\Users\PC\Documents\datn_hao\DATN\app\web
@@ -41,14 +78,40 @@ npm install
 npm run build
 ```
 
+Linux / WSL:
+
+```bash
+cd /path/to/DATN/app/web
+npm install
+npm run build
+```
+
 Sau khi build, file se duoc tao tai:
 - `app/frontend/dist/`
 
+Neu gap loi:
+
+```powershell
+'vite' is not recognized as an internal or external command
+```
+
+thi thuong la do chua chay `npm install` trong `app/web`.
+
 ### 3) Chay Backend API (FastAPI + serve frontend)
+
+Windows PowerShell:
 
 ```powershell
 cd C:\Users\PC\Documents\datn_hao\DATN
 conda activate datn_hao
+uvicorn app.backend.main:app --reload --host 127.0.0.1 --port 8080
+```
+
+Linux / WSL:
+
+```bash
+cd /path/to/DATN
+source <your_env>/bin/activate
 uvicorn app.backend.main:app --reload --host 127.0.0.1 --port 8080
 ```
 
@@ -58,12 +121,31 @@ uvicorn app.backend.main:app --reload --host 127.0.0.1 --port 8080
 - API health: `http://127.0.0.1:8080/api/health`
 
 Luu y:
-- Moi lan sua code trong `app/web/src`, can chay lai `npm run build`.
+
+- Backend phai chay tai thu muc goc repo `DATN`.
+- Moi lan sua code trong `app/web/src`, can chay lai `npm run build` neu dang serve frontend static bang FastAPI.
 - Backend co `--reload` nen se tu restart khi sua file Python.
+- Frontend build 1 lan roi thi van dung duoc; chi can build lai khi sua code trong `app/web/src`.
 
 ## Cau hinh `.env`
 
-Tao file `.env` trong `src`:
+Repo nay hien co 2 noi dung `.env` khac nhau:
+
+### 1) `.env` cho backend web
+
+Tao file `DATN/.env`:
+
+```env
+OPENAI_API_KEY=your_openai_api_key
+OCR_USE_GPU=1
+```
+
+- `OPENAI_API_KEY`: dung cho chuc nang AI goi y nhan.
+- `OCR_USE_GPU=1`: ep PaddleOCR dung GPU neu may ho tro.
+
+### 2) `.env` cho script pretrained trong `src`
+
+Tao file `DATN/src/.env`:
 
 ```env
 MODEL_ID=nielsr/layoutlmv3-finetuned-funsd
@@ -139,6 +221,12 @@ Chay OCR hang loat va tao file gan nhan:
 
 ```powershell
 python .\pipeline_runner.py prepare_ocr_labeling --input-dir .\data\stage_b_raw_images --output-dir .\data\labeling_stage_b --lang en
+```
+
+Neu OCR hoa don tieng Viet:
+
+```powershell
+python .\pipeline_runner.py prepare_ocr_labeling --input-dir .\data\stage_b_raw_images --output-dir .\data\labeling_stage_b --lang vi
 ```
 
 Output de gan nhan:
@@ -233,20 +321,20 @@ Linux/WSL:
 cd /path/to/DATN/src
 
 # 1) Download du lieu CORD cho train / validation / test
-python .\download_data.py --dataset-id naver-clova-ix/cord-v2 --split train
-python .\download_data.py --dataset-id naver-clova-ix/cord-v2 --split validation
-python .\download_data.py --dataset-id naver-clova-ix/cord-v2 --split test
+python ./download_data.py --dataset-id naver-clova-ix/cord-v2 --split train
+python ./download_data.py --dataset-id naver-clova-ix/cord-v2 --split validation
+python ./download_data.py --dataset-id naver-clova-ix/cord-v2 --split test
 
 # 2) CSV -> JSON cho GCN Stage A
-python .\pipeline_runner.py preprocess_gcn_dataset --input-csv .\data\train_nodes.csv --output-json .\data\stage_a_train.json
-python .\pipeline_runner.py preprocess_gcn_dataset --input-csv .\data\validation_nodes.csv --output-json .\data\stage_a_val.json
-python .\pipeline_runner.py preprocess_gcn_dataset --input-csv .\data\test_nodes.csv --output-json .\data\stage_a_test.json
+python ./pipeline_runner.py preprocess_gcn_dataset --input-csv ./data/train_nodes.csv --output-json ./data/stage_a_train.json
+python ./pipeline_runner.py preprocess_gcn_dataset --input-csv ./data/validation_nodes.csv --output-json ./data/stage_a_val.json
+python ./pipeline_runner.py preprocess_gcn_dataset --input-csv ./data/test_nodes.csv --output-json ./data/stage_a_test.json
 
 # 3) Train Stage A voi validation
-python .\pipeline_runner.py train_gcn_stage_a --dataset-json .\data\stage_a_train.json --val-dataset-json .\data\stage_a_val.json --checkpoint .\outputs\checkpoints\gcn_stage_a.pt --epochs 30 --lr 1e-3 --early-stop-patience 5
+python ./pipeline_runner.py train_gcn_stage_a --dataset-json ./data/stage_a_train.json --val-dataset-json ./data/stage_a_val.json --checkpoint ./outputs/checkpoints/gcn_stage_a.pt --epochs 30 --lr 1e-3 --early-stop-patience 5
 
 # 4) Test checkpoint tren tap test
-python .\pipeline_runner.py test_gcn --dataset-json .\data\stage_a_test.json --checkpoint .\outputs\checkpoints\gcn_stage_a.pt --output-eval .\outputs\gcn_stage_a_test_report.json
+python ./pipeline_runner.py test_gcn --dataset-json ./data/stage_a_test.json --checkpoint ./outputs/checkpoints/gcn_stage_a.pt --output-eval ./outputs/gcn_stage_a_test_report.json
 ```
 
 ### 3.2) Chay checkpoint Stage A vua train (tap test + 1 anh rieng)
@@ -273,6 +361,26 @@ Khi infer bang checkpoint, file output se co:
 - `classifier_mode: "trained_gcn_checkpoint"`
 - `checkpoint_path: "<duong_dan_checkpoint>"`
 
+### 3.3) Tach train / val / test cho Stage B
+
+Sau khi co file `data/stage_b_vi_dataset.json`, nen tach thanh 3 tap truoc khi train nghiem tuc:
+
+```powershell
+python .\pipeline_runner.py split_gcn_dataset --input-json .\data\stage_b_vi_dataset.json --output-train-json .\data\stage_b_train.json --output-val-json .\data\stage_b_val.json --output-test-json .\data\stage_b_test.json --train-ratio 0.7 --val-ratio 0.15 --test-ratio 0.15 --seed 42
+```
+
+Khi do:
+
+- `stage_b_train.json`: tap train
+- `stage_b_val.json`: tap validation
+- `stage_b_test.json`: tap test
+
+Vi du train Stage B:
+
+```powershell
+python .\pipeline_runner.py train_gcn_stage_b --dataset-json .\data\stage_b_train.json --val-dataset-json .\data\stage_b_val.json --base-checkpoint .\outputs\checkpoints\gcn_stage_a.pt --checkpoint .\outputs\checkpoints\gcn_stage_b.pt --epochs 20 --lr 5e-4 --early-stop-patience 3
+```
+
 ### 4) Evaluate
 
 ```powershell
@@ -290,6 +398,8 @@ python .\pipeline_runner.py train_ocr --command "your_ocr_training_command_here"
 - Neu gap loi `shm.dll` (Torch tren Windows), thu tu import da duoc dieu chinh trong `pipeline_runner.py` (pretrained mode import torch-side truoc OCR-side).
 - Neu bi chan mang HuggingFace (`WinError 10013`), service pretrained se tu fallback sang cache local (`local_files_only=True`).
 - Model pretrained FUNSD chi la baseline, thuong khong map tot ra field hoa don VN neu chua fine-tune.
+- Chuc nang upload file tren web can `python-multipart`, da duoc them vao requirements.
+- Chuc nang convert dataset HuggingFace can `datasets`, da duoc them vao requirements.
 
 ## Huong phat trien tiep
 

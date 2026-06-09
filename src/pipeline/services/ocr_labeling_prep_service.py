@@ -6,10 +6,11 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import cv2
 from loguru import logger
 
-from pipeline.core.ocr_engine import run_ocr
-from pipeline.core.visualize import draw_boxes
+from pipeline.core.ocr_engine import prepare_ocr_image, run_ocr
+from pipeline.core.visualize import draw_boxes, draw_boxes_on_array
 
 
 class OCRLabelingPrepService:
@@ -110,6 +111,7 @@ class OCRLabelingPrepService:
         output_dir: str,
         lang: str = "en",
         engine: str = "paddle",
+        ocr_overrides: dict | None = None,
         save_debug_images: bool = True,
         copy_images: bool = True,
         num_workers: int = 1,
@@ -210,18 +212,24 @@ class OCRLabelingPrepService:
             doc_id = image_path.stem
             logger.info("OCR [{}/{}]: {}", idx + 1, len(image_paths), image_path.name)
             try:
-                nodes = run_ocr(str(image_path), lang=lang, engine=engine)
+                processed_image = prepare_ocr_image(str(image_path), overrides=ocr_overrides)
+                nodes = run_ocr(str(image_path), lang=lang, engine=engine, overrides=ocr_overrides)
 
                 if copy_images:
                     target_img = images_out / image_path.name
-                    if target_img.resolve() != image_path.resolve():
+                    if processed_image is not None:
+                        cv2.imwrite(str(target_img), processed_image)
+                    elif target_img.resolve() != image_path.resolve():
                         shutil.copy2(image_path, target_img)
                 else:
                     target_img = image_path
 
                 if save_debug_images:
                     debug_path = debug_out / f"{doc_id}_boxes.jpg"
-                    draw_boxes(str(image_path), nodes, str(debug_path))
+                    if processed_image is not None:
+                        draw_boxes_on_array(processed_image, nodes, str(debug_path))
+                    else:
+                        draw_boxes(str(image_path), nodes, str(debug_path))
 
                 json_path = ocr_json_out / f"{doc_id}.json"
                 json_payload = {
@@ -234,6 +242,7 @@ class OCRLabelingPrepService:
                             "text": n.text,
                             "score": n.score,
                             "bbox": [n.x1, n.y1, n.x2, n.y2],
+                            "quad": [[px, py] for px, py in (n.quad or ())],
                         }
                         for n in nodes
                     ],

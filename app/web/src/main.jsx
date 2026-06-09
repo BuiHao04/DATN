@@ -129,9 +129,12 @@ body{margin:0;background:var(--bg);font-family:Inter,Segoe UI,Arial,sans-serif;c
 .review-pane-head h4{margin:0;font-size:15px}
 .review-pane-body{padding:10px 12px}
 .review-list{max-height:820px;overflow:auto}
-.review-image{position:relative;border:1px solid #ddd8ea;border-radius:12px;background:#f8f7fc;overflow:hidden}
-.review-image img{width:100%;display:block;max-height:680px;object-fit:contain;background:#f8f7fc}
-.review-overlay{position:absolute;inset:0}
+.review-image{border:1px solid #ddd8ea;border-radius:12px;background:#f8f7fc;overflow:auto;padding:12px;text-align:center}
+.review-canvas{position:relative;display:inline-block;line-height:0;max-width:100%}
+.review-canvas img{display:block;max-width:100%;height:auto;max-height:680px;background:#f8f7fc}
+.review-overlay{position:absolute;inset:0;pointer-events:none}
+.review-overlay svg{width:100%;height:100%;display:block}
+.ocr-poly{cursor:pointer;pointer-events:auto}
 .review-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
 .review-kpi{border:1px solid #ddd8ea;border-radius:10px;background:#f9f8fe;padding:9px}
 .review-kpi .k{font-size:11px;color:#6b7280;margin-bottom:4px}.review-kpi .v{font-size:18px;font-weight:800}
@@ -229,6 +232,15 @@ const LABEL_COLORS = {
 
 function labelColor(label){
   return LABEL_COLORS[label] || LABEL_COLORS.OTHER;
+}
+
+function nodeHasQuad(node){
+  return Array.isArray(node?.quad) && node.quad.length >= 4;
+}
+
+function nodeQuadPoints(node){
+  if(!nodeHasQuad(node)) return "";
+  return node.quad.map((pt)=>`${Number(pt?.[0]||0)},${Number(pt?.[1]||0)}`).join(" ");
 }
 
 function isMoneyLike(text){
@@ -356,7 +368,21 @@ function App(){
   const [subdir,setSubdir]=useState("");
   const [recentRaw,setRecentRaw]=useState([]);
   const [allRawImages,setAllRawImages]=useState([]);
-  const [ocr,setOcr]=useState({input_dir:"data/stage_b_raw_images",output_dir:"data/labeling_stage_b",lang:"vi",ocr_engine:"paddle",save_debug_images:1,copy_images:1});
+  const [ocr,setOcr]=useState({
+    input_dir:"data/stage_b_raw_images",
+    output_dir:"data/labeling_stage_b",
+    lang:"vi",
+    ocr_engine:"paddle",
+    det_db_thresh:0.25,
+    det_db_box_thresh:0.58,
+    det_db_unclip_ratio:1.25,
+    drop_score:0.45,
+    use_dilation:0,
+    det_limit_side_len:1536,
+    upscale_factor:1.6,
+    save_debug_images:1,
+    copy_images:1
+  });
   const [dataset,setDataset]=useState({input_csv:"data/labeling_stage_b/nodes_to_label.csv",output_json:"data/stage_b_vi_dataset.json"});
   const [labelRows,setLabelRows]=useState([]);
   const [allowedLabels,setAllowedLabels]=useState(LABELS);
@@ -414,6 +440,13 @@ function App(){
     image:"",
     lang:"vi",
     ocr_engine:"paddle",
+    det_db_thresh:0.25,
+    det_db_box_thresh:0.6,
+    det_db_unclip_ratio:1.25,
+    drop_score:0.45,
+    use_dilation:0,
+    det_limit_side_len:1600,
+    upscale_factor:1.6,
     llm_model:"gpt-4.1-mini",
     output_dir:"data/single_image_check",
     save_debug_image:1,
@@ -432,6 +465,45 @@ function App(){
   const [knownDataFiles,setKnownDataFiles]=useState([]);
   const [knownCheckpointFiles,setKnownCheckpointFiles]=useState([]);
   const pollRef=useRef(null);
+
+  const applySingleOcrPreset=(preset)=>{
+    if(preset==="tight"){
+      setSingleCheck(prev=>({
+        ...prev,
+        det_db_thresh:0.25,
+        det_db_box_thresh:0.62,
+        det_db_unclip_ratio:1.18,
+        drop_score:0.45,
+        use_dilation:0,
+        det_limit_side_len:1600,
+        upscale_factor:1.8,
+      }));
+      return;
+    }
+    if(preset==="balanced"){
+      setSingleCheck(prev=>({
+        ...prev,
+        det_db_thresh:0.25,
+        det_db_box_thresh:0.58,
+        det_db_unclip_ratio:1.25,
+        drop_score:0.40,
+        use_dilation:0,
+        det_limit_side_len:1536,
+        upscale_factor:1.6,
+      }));
+      return;
+    }
+    setSingleCheck(prev=>({
+      ...prev,
+      det_db_thresh:0.22,
+      det_db_box_thresh:0.50,
+      det_db_unclip_ratio:1.45,
+      drop_score:0.35,
+      use_dilation:1,
+      det_limit_side_len:1792,
+      upscale_factor:1.8,
+    }));
+  };
 
   const loadJobs=async()=>{try{const r=await fetch("/api/jobs");const d=await r.json();setJobs(Array.isArray(d)?d:[]);}catch{setJobs([])}};
   const loadRecentRaw=async()=>{try{const r=await fetch("/api/files/stage-b-raw-images");const d=await r.json();setAllRawImages(d.files||[]);setRecentRaw((d.files||[]).slice(0,10)); if(d.input_dir) setOcr(s=>({...s,input_dir:d.input_dir}));}catch{setAllRawImages([]);setRecentRaw([])}};
@@ -977,12 +1049,41 @@ function App(){
                       <option value="vietocr">Paddle detect + VietOCR</option>
                     </select>
                   </TrainField>
+                  <TrainField label="DB box thresh" hint="Tăng lên thì box chặt hơn, nhưng có thể bỏ sót text nhỏ. Với hóa đơn thường thử 0.58 đến 0.68.">
+                    <input className="input" type="number" step="0.01" value={singleCheck.det_db_box_thresh} onChange={e=>setSingleCheck({...singleCheck,det_db_box_thresh:e.target.value})} />
+                  </TrainField>
+                  <TrainField label="Unclip ratio" hint="Giảm xuống thì box ôm sát chữ hơn. Nếu box bị phình rộng, hãy thử 1.10 đến 1.25.">
+                    <input className="input" type="number" step="0.01" value={singleCheck.det_db_unclip_ratio} onChange={e=>setSingleCheck({...singleCheck,det_db_unclip_ratio:e.target.value})} />
+                  </TrainField>
+                  <TrainField label="Drop score" hint="Bỏ các box OCR quá yếu. Tăng lên nếu đang bắt nhiều box rác.">
+                    <input className="input" type="number" step="0.01" value={singleCheck.drop_score} onChange={e=>setSingleCheck({...singleCheck,drop_score:e.target.value})} />
+                  </TrainField>
+                  <TrainField label="Det limit side" hint="Tăng kích thước detect để dễ bắt text nhỏ, đổi lại sẽ chậm hơn.">
+                    <input className="input" type="number" step="64" value={singleCheck.det_limit_side_len} onChange={e=>setSingleCheck({...singleCheck,det_limit_side_len:e.target.value})} />
+                  </TrainField>
+                  <TrainField label="Upscale factor" hint="Phóng ảnh lên trước OCR. Hữu ích khi ảnh nhỏ hoặc chữ mảnh.">
+                    <input className="input" type="number" step="0.1" value={singleCheck.upscale_factor} onChange={e=>setSingleCheck({...singleCheck,upscale_factor:e.target.value})} />
+                  </TrainField>
+                  <TrainField label="Use dilation" hint="Bật nếu chữ đứt nét hoặc box đang bị vỡ đoạn. Bình thường nên để 0.">
+                    <select className="input" value={singleCheck.use_dilation} onChange={e=>setSingleCheck({...singleCheck,use_dilation:Number(e.target.value)})}>
+                      <option value={0}>0 - Tắt</option>
+                      <option value={1}>1 - Bật</option>
+                    </select>
+                  </TrainField>
                   <TrainField label="Model AI gợi ý nhãn" hint="Chỉ dùng khi bạn bấm chạy OCR + AI. Endpoint sẽ gọi model này để gán nhãn dựa trên OCR text và context layout.">
                     <input className="input" value={singleCheck.llm_model} onChange={e=>setSingleCheck({...singleCheck,llm_model:e.target.value})} placeholder="gpt-4.1-mini" />
                   </TrainField>
                   <TrainField label="Thư mục lưu output preview" hint="Trang này sẽ tự lưu ra CSV preview tương thích train B, ảnh box OCR và file graph JSON vào thư mục này.">
                     <input className="input" value={singleCheck.output_dir} onChange={e=>setSingleCheck({...singleCheck,output_dir:e.target.value})} placeholder="data/single_image_check" />
                   </TrainField>
+                </div>
+                <div className="chipline" style={{marginTop:10}}>
+                  <button className="tab-btn" onClick={()=>applySingleOcrPreset("tight")}>Preset box chặt</button>
+                  <button className="tab-btn" onClick={()=>applySingleOcrPreset("balanced")}>Preset cân bằng</button>
+                  <button className="tab-btn" onClick={()=>applySingleOcrPreset("hard")}>Preset ảnh khó</button>
+                </div>
+                <div className="tiny" style={{marginTop:6}}>
+                  Mẹo nhanh: nếu box đang phình rộng, hãy giảm <b>Unclip ratio</b> trước. Nếu mất chữ nhỏ, tăng <b>Det limit side</b> hoặc giảm nhẹ <b>DB box thresh</b>.
                 </div>
                 <div className="actions" style={{marginTop:12}}>
                   <input type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp" onChange={e=>setSingleCheckUploadFile(e.target.files?.[0] || null)} />
@@ -1019,6 +1120,17 @@ function App(){
                           <div>Graph preview JSON</div><div>{singleInspect.artifacts?.graph_json_path || "-"}</div>
                           <div>Ảnh OCR box</div><div>{singleInspect.ocr_boxes_image || "-"}</div>
                           <div>Thư mục output</div><div>{singleInspect.artifacts?.output_dir || "-"}</div>
+                        </div>
+                      </div>
+                      <div className="node-detail" style={{marginTop:10}}>
+                        <div style={{fontWeight:800, marginBottom:8}}>Cấu hình OCR vừa chạy</div>
+                        <div className="node-detail-grid">
+                          <div>Engine</div><div>{singleCheck.ocr_engine}</div>
+                          <div>DB box thresh</div><div>{singleInspect.ocr_config?.det_db_box_thresh ?? "-"}</div>
+                          <div>Unclip ratio</div><div>{singleInspect.ocr_config?.det_db_unclip_ratio ?? "-"}</div>
+                          <div>Drop score</div><div>{singleInspect.ocr_config?.drop_score ?? "-"}</div>
+                          <div>Det limit side</div><div>{singleInspect.ocr_config?.det_limit_side_len ?? "-"}</div>
+                          <div>Upscale factor</div><div>{singleInspect.ocr_config?.upscale_factor ?? "-"}</div>
                         </div>
                       </div>
                       <div className="step" style={{marginTop:10}}>
@@ -1107,31 +1219,47 @@ function App(){
                       <div className="review-image">
                         {singleInspect.preview_path ? (
                           <>
-                            <img
-                              src={`/api/files/image?path=${encodeURIComponent(singleInspect.preview_path)}`}
-                              alt={singleInspect.doc_id}
-                              onLoad={(e)=>setSingleNatural({w:e.target.naturalWidth||1,h:e.target.naturalHeight||1})}
-                            />
-                            <div className="review-overlay">
-                              {(singleInspect.nodes || []).map((node)=>(
-                                <div
-                                  key={`single-box-${node.node_index}`}
-                                  className={`ocr-box ${singleActiveNode===node.node_index?"active":""}`}
-                                  style={{
-                                    left:`${((node.bbox?.[0]||0)/singleNatural.w)*100}%`,
-                                    top:`${((node.bbox?.[1]||0)/singleNatural.h)*100}%`,
-                                    width:`${(((node.bbox?.[2]||0)-(node.bbox?.[0]||0))/singleNatural.w)*100}%`,
-                                    height:`${(((node.bbox?.[3]||0)-(node.bbox?.[1]||0))/singleNatural.h)*100}%`,
-                                    borderColor: singleActiveNode===node.node_index ? "#ef4444" : labelColor(String((singleInspectTab==="ocr" ? node.heuristic_label : (node.picked_label || node.label || node.suggested_label)) || "OTHER").trim() || "OTHER").border,
-                                    background: singleActiveNode===node.node_index ? "rgba(239,68,68,.12)" : labelColor(String((singleInspectTab==="ocr" ? node.heuristic_label : (node.picked_label || node.label || node.suggested_label)) || "OTHER").trim() || "OTHER").fill,
-                                  }}
-                                  title={`${node.node_index}: ${node.text}`}
-                                  onClick={()=>setSingleActiveNode(node.node_index)}
-                                />
-                              ))}
-                            </div>
-                          </>
-                        ) : <div className="empty-state">Không có ảnh preview.</div>}
+                                    <div className="review-canvas">
+                                      <img
+                                        src={`/api/files/image?path=${encodeURIComponent(singleInspect.preview_path)}`}
+                                        alt={singleInspect.doc_id}
+                                        onLoad={(e)=>setSingleNatural({w:e.target.naturalWidth||1,h:e.target.naturalHeight||1})}
+                                      />
+                                      <div className="review-overlay">
+                                        <svg viewBox={`0 0 ${singleNatural.w} ${singleNatural.h}`} preserveAspectRatio="none">
+                                          {(singleInspect.nodes || []).map((node)=>{
+                                            const color = labelColor(String((singleInspectTab==="ocr" ? node.heuristic_label : (node.picked_label || node.label || node.suggested_label)) || "OTHER").trim() || "OTHER");
+                                            const isActive = singleActiveNode===node.node_index;
+                                            return nodeHasQuad(node) ? (
+                                              <polygon
+                                                key={`single-poly-${node.node_index}`}
+                                                className="ocr-poly"
+                                                points={nodeQuadPoints(node)}
+                                                fill={isActive ? "rgba(239,68,68,.12)" : color.fill}
+                                                stroke={isActive ? "#ef4444" : color.border}
+                                                strokeWidth="2"
+                                                onClick={()=>setSingleActiveNode(node.node_index)}
+                                              />
+                                            ) : (
+                                              <rect
+                                                key={`single-rect-${node.node_index}`}
+                                                className="ocr-poly"
+                                                x={Number(node.bbox?.[0]||0)}
+                                                y={Number(node.bbox?.[1]||0)}
+                                                width={Math.max(1, Number((node.bbox?.[2]||0) - (node.bbox?.[0]||0)))}
+                                                height={Math.max(1, Number((node.bbox?.[3]||0) - (node.bbox?.[1]||0)))}
+                                                fill={isActive ? "rgba(239,68,68,.12)" : color.fill}
+                                                stroke={isActive ? "#ef4444" : color.border}
+                                                strokeWidth="2"
+                                                onClick={()=>setSingleActiveNode(node.node_index)}
+                                              />
+                                            );
+                                          })}
+                                        </svg>
+                                      </div>
+                                    </div>
+                                  </>
+                                ) : <div className="empty-state">Không có ảnh preview.</div>}
                       </div>
                       <div className="tiny" style={{marginTop:8}}>
                         {singleInspectTab==="ocr"
@@ -1793,6 +1921,22 @@ function App(){
                   </select>
                   <div className="tiny">Nếu chọn `vietocr`, hệ thống sẽ giữ box của Paddle nhưng dùng VietOCR để đọc text trong từng box.</div>
                 </div>
+                <div className="grid3" style={{marginTop:8}}>
+                  <input className="input" type="number" step="0.01" value={ocr.det_db_box_thresh} onChange={e=>setOcr({...ocr,det_db_box_thresh:e.target.value})} placeholder="DB box thresh" />
+                  <input className="input" type="number" step="0.01" value={ocr.det_db_unclip_ratio} onChange={e=>setOcr({...ocr,det_db_unclip_ratio:e.target.value})} placeholder="Unclip ratio" />
+                  <input className="input" type="number" step="0.01" value={ocr.drop_score} onChange={e=>setOcr({...ocr,drop_score:e.target.value})} placeholder="Drop score" />
+                </div>
+                <div className="grid3" style={{marginTop:8}}>
+                  <input className="input" type="number" step="64" value={ocr.det_limit_side_len} onChange={e=>setOcr({...ocr,det_limit_side_len:e.target.value})} placeholder="Det limit side" />
+                  <input className="input" type="number" step="0.1" value={ocr.upscale_factor} onChange={e=>setOcr({...ocr,upscale_factor:e.target.value})} placeholder="Upscale factor" />
+                  <select className="input" value={ocr.use_dilation} onChange={e=>setOcr({...ocr,use_dilation:Number(e.target.value)})}>
+                    <option value={0}>Dilation: tắt</option>
+                    <option value={1}>Dilation: bật</option>
+                  </select>
+                </div>
+                <div className="tiny" style={{marginTop:6}}>
+                  Gợi ý hiện tại cho box chặt hơn: <b>box_thresh 0.58</b>, <b>unclip 1.25</b>, <b>drop_score 0.45</b>. Nếu box vẫn phình rộng, giảm unclip xuống 1.15-1.20.
+                </div>
                 <div style={{marginTop:8}} className="p">Tiến độ xử lý file: <b>{ocrCurrent}</b> / <b>{ocrTotal}</b> ({ocrPct}%)</div>
                 {ocrCurrentFile && <div className="tiny" style={{marginTop:4}}>Đang xử lý: <b>{ocrCurrentFile}</b></div>}
                 <div className="bar" style={{marginTop:6}}><div style={{width:`${ocrPct}%`}}/></div>
@@ -1888,28 +2032,44 @@ function App(){
                               <div className="review-image">
                                 {graphInspect.preview_path ? (
                                   <>
-                                    <img
-                                      src={`/api/files/image?path=${encodeURIComponent(graphInspect.preview_path)}`}
-                                      alt={graphInspect.doc_id}
-                                      onLoad={(e)=>setImageNatural({w:e.target.naturalWidth||1,h:e.target.naturalHeight||1})}
-                                    />
-                                    <div className="review-overlay">
-                                      {reviewImageNodes.map((node)=>(
-                                        <div
-                                          key={`box-${node.node_index}`}
-                                          className={`ocr-box ${activeNodeIndex===node.node_index?"active":""}`}
-                                          style={{
-                                            left:`${((node.bbox?.[0]||0)/imageNatural.w)*100}%`,
-                                            top:`${((node.bbox?.[1]||0)/imageNatural.h)*100}%`,
-                                            width:`${(((node.bbox?.[2]||0)-(node.bbox?.[0]||0))/imageNatural.w)*100}%`,
-                                            height:`${(((node.bbox?.[3]||0)-(node.bbox?.[1]||0))/imageNatural.h)*100}%`,
-                                            borderColor: activeNodeIndex===node.node_index ? "#ef4444" : labelColor(String(node.picked_label || node.label || "").trim() || "OTHER").border,
-                                            background: activeNodeIndex===node.node_index ? "rgba(239,68,68,.12)" : labelColor(String(node.picked_label || node.label || "").trim() || "OTHER").fill,
-                                          }}
-                                          title={`${node.node_index}: ${node.text}`}
-                                          onClick={()=>setActiveNodeIndex(node.node_index)}
-                                        />
-                                      ))}
+                                    <div className="review-canvas">
+                                      <img
+                                        src={`/api/files/image?path=${encodeURIComponent(graphInspect.preview_path)}`}
+                                        alt={graphInspect.doc_id}
+                                        onLoad={(e)=>setImageNatural({w:e.target.naturalWidth||1,h:e.target.naturalHeight||1})}
+                                      />
+                                      <div className="review-overlay">
+                                        <svg viewBox={`0 0 ${imageNatural.w} ${imageNatural.h}`} preserveAspectRatio="none">
+                                          {reviewImageNodes.map((node)=>{
+                                            const color = labelColor(String(node.picked_label || node.label || "").trim() || "OTHER");
+                                            const isActive = activeNodeIndex===node.node_index;
+                                            return nodeHasQuad(node) ? (
+                                              <polygon
+                                                key={`box-poly-${node.node_index}`}
+                                                className="ocr-poly"
+                                                points={nodeQuadPoints(node)}
+                                                fill={isActive ? "rgba(239,68,68,.12)" : color.fill}
+                                                stroke={isActive ? "#ef4444" : color.border}
+                                                strokeWidth="2"
+                                                onClick={()=>setActiveNodeIndex(node.node_index)}
+                                              />
+                                            ) : (
+                                              <rect
+                                                key={`box-rect-${node.node_index}`}
+                                                className="ocr-poly"
+                                                x={Number(node.bbox?.[0]||0)}
+                                                y={Number(node.bbox?.[1]||0)}
+                                                width={Math.max(1, Number((node.bbox?.[2]||0) - (node.bbox?.[0]||0)))}
+                                                height={Math.max(1, Number((node.bbox?.[3]||0) - (node.bbox?.[1]||0)))}
+                                                fill={isActive ? "rgba(239,68,68,.12)" : color.fill}
+                                                stroke={isActive ? "#ef4444" : color.border}
+                                                strokeWidth="2"
+                                                onClick={()=>setActiveNodeIndex(node.node_index)}
+                                              />
+                                            );
+                                          })}
+                                        </svg>
+                                      </div>
                                     </div>
                                   </>
                                 ) : <div className="empty-state">Không có ảnh preview.</div>}

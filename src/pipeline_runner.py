@@ -183,6 +183,15 @@ def cmd_prepare_ocr_labeling(args: argparse.Namespace) -> None:
         output_dir=args.output_dir,
         lang=args.lang,
         engine=args.ocr_engine,
+        ocr_overrides={
+            "det_db_thresh": args.det_db_thresh,
+            "det_db_box_thresh": args.det_db_box_thresh,
+            "det_db_unclip_ratio": args.det_db_unclip_ratio,
+            "drop_score": args.drop_score,
+            "use_dilation": args.use_dilation,
+            "det_limit_side_len": args.det_limit_side_len,
+            "upscale_factor": args.upscale_factor,
+        },
         save_debug_images=bool(args.save_debug_images),
         copy_images=bool(args.copy_images),
         num_workers=args.num_workers,
@@ -391,6 +400,13 @@ def build_parser() -> argparse.ArgumentParser:
     po.add_argument("--output-dir", default="data/labeling_stage_b")
     po.add_argument("--lang", default="vi")
     po.add_argument("--ocr-engine", default="paddle")
+    po.add_argument("--det-db-thresh", type=float, default=0.25)
+    po.add_argument("--det-db-box-thresh", type=float, default=0.58)
+    po.add_argument("--det-db-unclip-ratio", type=float, default=1.25)
+    po.add_argument("--drop-score", type=float, default=0.45)
+    po.add_argument("--use-dilation", type=int, default=0)
+    po.add_argument("--det-limit-side-len", type=int, default=1536)
+    po.add_argument("--upscale-factor", type=float, default=1.6)
     po.add_argument("--save-debug-images", type=int, default=1)
     po.add_argument("--copy-images", type=int, default=1)
     po.add_argument("--num-workers", type=int, default=1, help="Total parallel workers")

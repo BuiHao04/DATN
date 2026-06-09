@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Tuple
 
 
 LABEL_MAP = {
@@ -40,3 +41,4 @@ class OCRNode:
     cy: float
     w: float
     h: float
+    quad: Tuple[Tuple[float, float], ...] | None = None

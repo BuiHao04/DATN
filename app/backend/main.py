@@ -217,6 +217,13 @@ class SingleImagePreviewRequest(BaseModel):
     image: str
     lang: str = "vi"
     ocr_engine: str = "paddle"
+    det_db_thresh: float = 0.25
+    det_db_box_thresh: float = 0.6
+    det_db_unclip_ratio: float = 1.25
+    drop_score: float = 0.45
+    use_dilation: int = 0
+    det_limit_side_len: int = 1600
+    upscale_factor: float = 1.6
     with_ai: int = 0
     llm_model: str = "gpt-4.1-mini"
     output_dir: str = "data/single_image_check"
@@ -231,6 +238,13 @@ class PrepareOcrLabelingRequest(BaseModel):
     output_dir: str = "data/labeling_stage_b"
     lang: str = "en"
     ocr_engine: str = "paddle"
+    det_db_thresh: float = 0.25
+    det_db_box_thresh: float = 0.58
+    det_db_unclip_ratio: float = 1.25
+    drop_score: float = 0.45
+    use_dilation: int = 0
+    det_limit_side_len: int = 1536
+    upscale_factor: float = 1.6
     save_debug_images: int = 1
     copy_images: int = 1
 
@@ -406,13 +420,31 @@ def _project_relative_path(path: Path) -> str:
             return str(resolved).replace("\\", "/")
 
 
-def _stage_b_image_index() -> list[Path]:
-    STAGE_B_RAW_DIR.mkdir(parents=True, exist_ok=True)
+def _image_files_under(directory: Path) -> list[Path]:
+    if not directory.exists():
+        return []
     return [
         p
-        for p in STAGE_B_RAW_DIR.rglob("*")
+        for p in directory.rglob("*")
         if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
     ]
+
+
+def _stage_b_image_index(base_dir: Path | None = None) -> list[Path]:
+    STAGE_B_RAW_DIR.mkdir(parents=True, exist_ok=True)
+    indexed: list[Path] = []
+    if base_dir is not None:
+        indexed.extend(_image_files_under(base_dir / "images"))
+    indexed.extend(_image_files_under(STAGE_B_RAW_DIR))
+    seen: set[str] = set()
+    deduped: list[Path] = []
+    for path in indexed:
+        key = str(path.resolve()).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
 
 
 def _find_image_for_doc(doc_id: str, image_index: list[Path]) -> str | None:
@@ -424,6 +456,24 @@ def _find_image_for_doc(doc_id: str, image_index: list[Path]) -> str | None:
     if fuzzy:
         return str(fuzzy.relative_to(SRC_DIR))
     return None
+
+
+def _load_doc_quads_from_ocr_json(input_csv_path: Path, doc_id: str) -> list[list[list[float]]]:
+    try:
+        ocr_json_path = input_csv_path.parent / "ocr_json" / f"{doc_id}.json"
+        if not ocr_json_path.exists():
+            return []
+        payload = json.loads(ocr_json_path.read_text(encoding="utf-8"))
+        quads: list[list[list[float]]] = []
+        for node in payload.get("nodes", []):
+            quad = node.get("quad") or []
+            if isinstance(quad, list) and len(quad) >= 4:
+                quads.append([[float(pt[0]), float(pt[1])] for pt in quad[:4]])
+            else:
+                quads.append([])
+        return quads
+    except Exception:
+        return []
 
 
 def _build_cmd(mode: str, args: dict[str, Any]) -> list[str]:
@@ -1744,7 +1794,7 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
             if len(slot["samples"]) < 8:
                 slot["samples"].append({"text": text, "label": label})
 
-    image_index = _stage_b_image_index()
+    image_index = _stage_b_image_index(csv_path.parent)
     all_docs = list(grouped.values())
     page_size = max(1, min(req.page_size, 200))
     page = max(1, req.page)
@@ -1799,10 +1849,11 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
     if not doc_rows:
         raise HTTPException(status_code=404, detail=f"Doc not found: {req.doc_id}")
 
+    doc_quads = _load_doc_quads_from_ocr_json(csv_path, req.doc_id)
     nodes: list[OCRNode] = []
     labels: list[str] = []
     row_numbers: list[int] = []
-    for row in doc_rows:
+    for row_idx, row in enumerate(doc_rows):
         text = str(row.get(req.text_col, "") or "").strip()
         if not text:
             continue
@@ -1829,6 +1880,7 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
                 cy=(y1 + y2) / 2.0,
                 w=w,
                 h=h,
+                quad=tuple((float(pt[0]), float(pt[1])) for pt in (doc_quads[row_idx] if row_idx < len(doc_quads) else [])[:4]) or None,
             )
         )
         labels.append(str(row.get(req.label_col, "") or "").strip())
@@ -1843,7 +1895,7 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
         edge_index[1].append(dst)
         adjacency[src][dst] = 1
 
-    image_index = _stage_b_image_index()
+    image_index = _stage_b_image_index(csv_path.parent)
     preview_path = _find_image_for_doc(req.doc_id, image_index)
     feature_names = ["text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score"]
     node_items = []
@@ -1856,6 +1908,7 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
                 "label": labels[i],
                 "score": node.score,
                 "bbox": [node.x1, node.y1, node.x2, node.y2],
+                "quad": [[px, py] for px, py in (node.quad or ())],
                 "features": features[i],
             }
         )
@@ -1887,7 +1940,22 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     ocr_service = OCRService()
-    ocr_nodes = ocr_service.run(str(image_path), lang=req.lang or "vi", engine=req.ocr_engine or "paddle")
+    ocr_overrides = {
+        "det_db_thresh": req.det_db_thresh,
+        "det_db_box_thresh": req.det_db_box_thresh,
+        "det_db_unclip_ratio": req.det_db_unclip_ratio,
+        "drop_score": req.drop_score,
+        "use_dilation": req.use_dilation,
+        "det_limit_side_len": req.det_limit_side_len,
+        "upscale_factor": req.upscale_factor,
+    }
+    processed_image = ocr_service.prepare_image(str(image_path), overrides=ocr_overrides)
+    ocr_nodes = ocr_service.run(
+        str(image_path),
+        lang=req.lang or "vi",
+        engine=req.ocr_engine or "paddle",
+        overrides=ocr_overrides,
+    )
 
     doc_id = image_path.stem
     rows: list[dict[str, Any]] = []
@@ -1935,9 +2003,21 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
         edge_index[1].append(dst)
         adjacency[src][dst] = 1
 
+    preview_image_path = output_dir / f"{doc_id}_normalized.jpg"
+    if processed_image is not None:
+        import cv2
+
+        cv2.imwrite(str(preview_image_path), processed_image)
+        preview_image_rel = _project_relative_path(preview_image_path)
+    else:
+        preview_image_rel = _project_relative_path(image_path)
+
     if bool(req.save_debug_image):
         debug_image_path = output_dir / f"{doc_id}_ocr_boxes.jpg"
-        ocr_service.save_debug_image(str(image_path), ocr_nodes, str(debug_image_path))
+        if processed_image is not None:
+            ocr_service.save_debug_image_from_array(processed_image, ocr_nodes, str(debug_image_path))
+        else:
+            ocr_service.save_debug_image(str(image_path), ocr_nodes, str(debug_image_path))
         debug_image_rel = _project_relative_path(debug_image_path)
     else:
         debug_image_rel = ""
@@ -1990,6 +2070,7 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
                 "row_role_hint": ctx.get("row_role_hint"),
                 "score": node.score,
                 "bbox": [node.x1, node.y1, node.x2, node.y2],
+                "quad": [[px, py] for px, py in (node.quad or ())],
                 "features": features[idx] if idx < len(features) else [],
             }
         )
@@ -2019,8 +2100,9 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
         "mode": "ocr_ai_preview" if use_ai else "ocr_preview",
         "doc_id": doc_id,
         "image_path": _project_relative_path(image_path),
-        "preview_path": _project_relative_path(image_path),
+        "preview_path": preview_image_rel,
         "ocr_boxes_image": debug_image_rel,
+        "ocr_config": ocr_overrides,
         "artifacts": {
             "train_b_csv_path": _project_relative_path(csv_preview_path),
             "graph_json_path": _project_relative_path(graph_preview_path),

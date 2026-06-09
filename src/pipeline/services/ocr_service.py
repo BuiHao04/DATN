@@ -30,3 +30,10 @@ class OCRService:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         draw_boxes_on_array(image, nodes, output_path)
         return output_path
+
+    def save_image_array(self, image, output_path: str) -> str:
+        import cv2
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(output_path, image)
+        return output_path

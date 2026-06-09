@@ -123,6 +123,9 @@ def _prepare_image_for_ocr(image_path: str) -> Tuple[np.ndarray | str, float, fl
     if _env_bool("OCR_DOCUMENT_NORMALIZE", True):
         image = _normalize_document_image(image)
 
+    if _env_bool("OCR_MASK_RECEIPT_REGION", True):
+        image = _apply_receipt_region_mask(image)
+
     orig_h, orig_w = image.shape[:2]
     scale = 1.0
     if max(orig_h, orig_w) < _env_int("OCR_UPSCALE_MIN_SIDE", 1400):
@@ -234,6 +237,39 @@ def _find_document_quad(image: np.ndarray) -> np.ndarray | None:
     if scale != 1.0:
         best_quad = best_quad / scale
     return best_quad
+
+
+def _extract_receipt_mask(image: np.ndarray) -> np.ndarray:
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+    light_mask = cv2.inRange(l_channel, _env_int("OCR_MASK_L_MIN", 155), 255)
+    a_center_mask = cv2.inRange(a_channel, 110, 145)
+    b_center_mask = cv2.inRange(b_channel, 110, 150)
+    mask = cv2.bitwise_and(light_mask, cv2.bitwise_and(a_center_mask, b_center_mask))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return mask
+    min_area = image.shape[0] * image.shape[1] * _env_float("OCR_MASK_MIN_AREA_RATIO", 0.18)
+    best = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(best) < min_area:
+        return mask
+    clean = np.zeros_like(mask)
+    cv2.drawContours(clean, [best], -1, 255, thickness=cv2.FILLED)
+    clean = cv2.morphologyEx(clean, cv2.MORPH_CLOSE, kernel, iterations=2)
+    return clean
+
+
+def _apply_receipt_region_mask(image: np.ndarray) -> np.ndarray:
+    mask = _extract_receipt_mask(image)
+    if mask is None or not np.any(mask):
+        return image
+    out = image.copy()
+    bg_color = tuple(int(_env_int("OCR_MASK_BG_VALUE", 255)) for _ in range(3))
+    out[mask == 0] = bg_color
+    return out
 
 
 def _deskew_image(image: np.ndarray) -> np.ndarray:
@@ -485,6 +521,55 @@ def _merge_node_group(group: list[OCRNode]) -> OCRNode:
     )
 
 
+def _is_numeric_like(text: str) -> bool:
+    t = str(text or "").strip()
+    if not t:
+        return False
+    return bool(any(ch.isdigit() for ch in t)) and bool(
+        all(ch.isdigit() or ch in ".,:/-()% " for ch in t)
+    )
+
+
+def _line_groups(nodes: List[OCRNode]) -> list[list[OCRNode]]:
+    if not nodes:
+        return []
+    ordered = sorted(nodes, key=lambda n: (n.cy, n.x1))
+    groups: list[list[OCRNode]] = []
+    for node in ordered:
+        if not groups:
+            groups.append([node])
+            continue
+        current = groups[-1]
+        ref_cy = sum(n.cy for n in current) / len(current)
+        ref_h = max(max(n.h for n in current), node.h, 1.0)
+        if abs(node.cy - ref_cy) <= ref_h * _env_float("OCR_LINE_CLUSTER_RATIO", 0.55):
+            current.append(node)
+        else:
+            groups.append([node])
+    return [sorted(group, key=lambda n: n.x1) for group in groups]
+
+
+def _should_merge_table_nodes(a: OCRNode, b: OCRNode, row_size: int) -> bool:
+    if row_size < _env_int("OCR_TABLE_ROW_MIN_CELLS", 4):
+        return False
+    if _is_numeric_like(a.text) and _is_numeric_like(b.text):
+        return False
+    if _is_numeric_like(b.text) and len(str(a.text or "").strip()) >= 4:
+        return False
+    if _is_numeric_like(a.text) and len(str(b.text or "").strip()) >= 4:
+        return False
+    height_ref = max(a.h, b.h, 1.0)
+    gap = b.x1 - a.x2
+    center_delta = abs(a.cy - b.cy)
+    if center_delta > height_ref * _env_float("OCR_TABLE_MERGE_LINE_Y_RATIO", 0.38):
+        return False
+    if gap < -height_ref * 0.15:
+        return False
+    if gap > height_ref * _env_float("OCR_TABLE_MERGE_GAP_RATIO", 0.7):
+        return False
+    return True
+
+
 def _should_merge_nodes(a: OCRNode, b: OCRNode) -> bool:
     if not str(a.text).strip() or not str(b.text).strip():
         return False
@@ -506,21 +591,25 @@ def _should_merge_nodes(a: OCRNode, b: OCRNode) -> bool:
 def _merge_nodes_same_line(nodes: List[OCRNode]) -> List[OCRNode]:
     if not _env_bool("OCR_MERGE_SAME_LINE", True) or len(nodes) <= 1:
         return nodes
-    ordered = sorted(nodes, key=lambda n: (round(n.cy, 1), n.x1))
     merged: list[OCRNode] = []
-    current_group: list[OCRNode] = []
-    for node in ordered:
-        if not current_group:
-            current_group = [node]
-            continue
-        prev = current_group[-1]
-        if _should_merge_nodes(prev, node):
-            current_group.append(node)
-        else:
+    for row in _line_groups(nodes):
+        current_group: list[OCRNode] = []
+        row_size = len(row)
+        for node in row:
+            if not current_group:
+                current_group = [node]
+                continue
+            prev = current_group[-1]
+            can_merge = _should_merge_nodes(prev, node)
+            if not can_merge and _env_bool("OCR_TABLE_AWARE_MERGE", True):
+                can_merge = _should_merge_table_nodes(prev, node, row_size)
+            if can_merge:
+                current_group.append(node)
+            else:
+                merged.append(_merge_node_group(current_group))
+                current_group = [node]
+        if current_group:
             merged.append(_merge_node_group(current_group))
-            current_group = [node]
-    if current_group:
-        merged.append(_merge_node_group(current_group))
     return merged
 
 

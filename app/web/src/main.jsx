@@ -1216,6 +1216,32 @@ function App(){
                     </>
                   ) : (
                     <>
+                      <div className="compare-grid" style={{marginBottom:12}}>
+                        <div className="step" style={{margin:0}}>
+                          <div className="step-head"><h3>Ảnh gốc</h3><span className="badge idle">RAW</span></div>
+                          <div className="step-body">
+                            {singleInspect.original_image_path ? (
+                              <img className="inspect-preview" src={`/api/files/image?path=${encodeURIComponent(singleInspect.original_image_path)}`} alt="Ảnh gốc" />
+                            ) : <div className="empty-state">Không có ảnh gốc.</div>}
+                          </div>
+                        </div>
+                        <div className="step" style={{margin:0}}>
+                          <div className="step-head"><h3>Ảnh sau normalize + mask</h3><span className="badge idle">NORM</span></div>
+                          <div className="step-body">
+                            {singleInspect.normalized_image_path ? (
+                              <img className="inspect-preview" src={`/api/files/image?path=${encodeURIComponent(singleInspect.normalized_image_path)}`} alt="Ảnh normalize" />
+                            ) : <div className="empty-state">Không có ảnh normalized.</div>}
+                          </div>
+                        </div>
+                        <div className="step" style={{margin:0}}>
+                          <div className="step-head"><h3>Ảnh debug OCR</h3><span className="badge idle">DEBUG</span></div>
+                          <div className="step-body">
+                            {singleInspect.ocr_boxes_image ? (
+                              <img className="inspect-preview" src={`/api/files/image?path=${encodeURIComponent(singleInspect.ocr_boxes_image)}`} alt="Ảnh OCR debug" />
+                            ) : <div className="empty-state">Chưa lưu ảnh debug OCR.</div>}
+                          </div>
+                        </div>
+                      </div>
                       <div className="review-image">
                         {singleInspect.preview_path ? (
                           <>

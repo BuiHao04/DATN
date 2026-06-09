@@ -854,42 +854,58 @@ def _suggest_label_from_text(text: str) -> str:
     t = text.strip()
     low = t.lower()
 
-    if re.search(r"\b(cash|ti[eê]n m[aă]t|momo|zalopay|gopay|gojek|card|visa|mastercard|atm)\b", low):
+    if not t:
+        return "OTHER"
+    if re.search(r"\b(khach hang|ten khach|customer|ghi chu|note)\b", low):
+        return "OTHER"
+    if re.search(r"\b(thoi gian|gio vao|gio ra|so ban|ban so|stt|thu tu)\b", low):
+        return "OTHER"
+    if re.search(
+        r"^\((vua|lon|nho|size|size\s*[smlx0-9]+|hot|cold|nong|lanh|it da|it duong|mang ve|tai cho|take away)\)$",
+        low,
+    ):
+        return "OTHER"
+
+    if re.search(r"\b(cash|tien mat|momo|zalopay|gopay|gojek|card|visa|mastercard|atm)\b", low):
         return "PAYMENT_METHOD"
-    if re.search(r"\b(thu[eê] ng[aâ]n|cashier|qu[aà]y|counter)\b", low):
+    if re.search(r"\b(thu ngan|cashier|quay|counter)\b", low):
         return "CASHIER"
-    if re.search(r"\b(mst|m[aã]\s*s[oố]\s*thu[eế]|tax code)\b", low):
+    if re.search(r"\b(mst|ma so thue|tax code)\b", low):
         return "TAX_CODE"
-    if re.search(r"\b(sdt|đi[eệ]n tho[aạ]i|phone|tel|hotline)\b", low) or re.fullmatch(r"[+()0-9.\-\s]{8,20}", t):
+    if re.search(r"\b(sdt|dien thoai|phone|tel|hotline)\b", low) or re.fullmatch(r"[+()0-9.\-\s]{8,20}", t):
         return "MERCHANT_PHONE"
-    if re.search(r"\b(đ[ịi]a ch[ỉi]|address)\b", low):
+    if (
+        re.search(r"\b(dia chi|address|duong|phuong|quan|thanh pho|so nha|ap|xa|huyen)\b", low)
+        or any(token in low for token in [" p.", " q.", " tp.", ", p.", ", q.", ", tp."])
+    ) and any(ch.isdigit() for ch in t):
         return "MERCHANT_ADDRESS"
-    if re.search(r"\b(h[oó]a đ[oơ]n|invoice|bill\s*no|m[aã]\s*hd|s[oố]\s*hd|ref)\b", low):
+    if re.search(r"\b(hoa don|invoice|bill\s*no|ma hd|so hd|ref)\b", low):
         return "INVOICE_ID"
-    if re.search(r"\b(ng[aà]y|date)\b", low) or re.search(r"\b\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?\b", low):
+    if re.search(r"\b(ngay|date)\b", low) or re.search(r"\b\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?\b", low):
         return "DATE"
-    if re.search(r"\b(gi[oờ]|time)\b", low) or re.search(r"\b([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b", low):
+    if re.search(r"\b(gio|time)\b", low) or re.search(r"\b([01]?\d|2[0-3])[:.][0-5]\d\b", low):
         return "TIME"
-    if re.search(r"\b(t[aạ]m t[ií]nh|subtotal)\b", low):
+    if re.search(r"\b(tam tinh|subtotal)\b", low):
         return "SUBTOTAL"
-    if re.search(r"\b(ph[ií]\s*d[iị]ch v[uụ]|service fee)\b", low):
+    if re.search(r"\b(phi dich vu|service fee)\b", low):
         return "SERVICE_FEE"
-    if re.search(r"\b(gi[aả]m gi[aá]|discount)\b", low):
+    if re.search(r"\b(giam gia|discount)\b", low):
         return "DISCOUNT"
-    if re.search(r"\b(vat|thu[eế])\b", low):
+    if re.search(r"\b(vat|thue)\b", low):
         return "TAX_AMOUNT"
-    if re.search(r"\b(t[oổ]ng c[oộ]ng|th[aà]nh ti[eề]n|total)\b", low):
+    if re.search(r"\b(tong cong|thanh tien|tong thanh toan|tong tien|total)\b", low):
         return "TOTAL_AMOUNT"
-    if re.search(r"\b(s[lố]?\s*l[uượ]ng|qty|quantity|x\d+)\b", low):
+    if re.search(r"^(tt|ten mon|ten hang|mat hang|sl|dvt|d\.?gia|don gia|t\.?tien)$", low):
+        return "OTHER"
+    if re.search(r"\b(so luong|qty|quantity|x\d+)\b", low):
         return "ITEM_QTY"
-    if re.search(r"\b(đ[oơ]n gi[aá]|unit price|price|đ\/|vnd)\b", low):
+    if re.search(r"\b(don gia|unit price|price|d/|vnd)\b", low):
         return "ITEM_UNIT_PRICE"
-    if re.search(r"\b(amount|ti[eề]n)\b", low):
+    if re.search(r"\b(amount|tien)\b", low):
         return "ITEM_AMOUNT"
     if len(t) > 2 and any(c.isalpha() for c in t):
         return "ITEM_NAME"
     return "OTHER"
-
 
 def _extract_json_array(raw_text: str) -> list[str]:
     txt = raw_text.strip()
@@ -1077,6 +1093,7 @@ def _doc_context_from_rows(
             node["line_id"] = line_id
             node["line_region"] = region
             node["line_pos"] = pos
+            node["is_item_header_line"] = item_header_line_id is not None and line_id == item_header_line_id
             node["same_line_texts"] = texts[:]
             node["left_text"] = texts[pos - 1] if pos > 0 else ""
             node["right_text"] = texts[pos + 1] if pos + 1 < len(texts) else ""
@@ -1121,12 +1138,17 @@ def _doc_context_from_rows(
     doc_summary = {
         "line_count": len(line_groups),
         "header_lines": [x["text"] for x in line_meta[: min(6, len(line_meta))]],
+        "item_lines": [x["text"] for x in line_meta[header_boundary : min(first_summary_line, header_boundary + 8)]],
         "summary_lines": [x["text"] for x in line_meta[first_summary_line : first_summary_line + 6]],
         "item_header_line": line_meta[item_header_line_id]["text"] if item_header_line_id is not None else "",
         "detected_regions": {
             "header_end_line": header_boundary,
             "summary_start_line": first_summary_line,
         },
+        "line_region_map": [
+            {"line_id": x["line_id"], "region": x["region"], "text": x["text"]}
+            for x in line_meta[: min(len(line_meta), 24)]
+        ],
     }
     return nodes, doc_summary
 
@@ -1140,9 +1162,29 @@ def _heuristic_label_for_node(node: dict[str, Any]) -> tuple[str | None, float, 
     around = " | ".join(filter(None, [left, right, _norm_text(node.get("top_text", "")), _norm_text(node.get("bottom_text", "")), same_line]))
     region = node.get("line_region", "")
     column_hint = node.get("column_hint", "")
+    is_item_header_line = bool(node.get("is_item_header_line"))
+    keyword_blob = " | ".join(filter(None, [norm, around]))
+
+    address_tokens = ["dia chi", "address", "duong", "phuong", "quan", "thanh pho", "tp", "so nha", "ap", "xa", "huyen", "q.", "p."]
+    header_row_tokens = ["tt", "ten mon", "ten hang", "mat hang", "sl", "so luong", "dvt", "don gia", "dgia", "thanh tien"]
+    admin_tokens = ["khach hang", "customer", "ghi chu", "note", "thoi gian", "gio", "ngay", "so hd", "hoa don", "invoice", "mst", "thu ngan"]
+    item_modifier_pattern = re.compile(
+        r"^\(?\s*(vua|lon|nho|size\s*[smlx0-9]+|hot|cold|nong|lanh|it da|it duong|mang ve|tai cho|take away|da)\s*\)?$"
+    )
 
     if not text.strip():
         return "OTHER", 1.0, "empty_text"
+    if is_item_header_line:
+        return "OTHER", 0.99, "item_header_line"
+    if item_modifier_pattern.search(norm):
+        return "OTHER", 0.96, "item_modifier_like"
+    if re.fullmatch(r"[()\[\]\-_/+*.:,'\" ]+", text):
+        return "OTHER", 0.99, "punctuation_only"
+    if any(token in norm for token in ["khach hang", "customer", "ghi chu", "note"]):
+        return "OTHER", 0.94, "customer_or_note_context"
+    if sum(1 for token in admin_tokens if token in keyword_blob) >= 2 and region != "items":
+        return "OTHER", 0.9, "mixed_admin_context"
+
     if node["is_date_like"]:
         return "DATE", 0.98, "date_pattern"
     if node["is_time_like"]:
@@ -1161,8 +1203,14 @@ def _heuristic_label_for_node(node: dict[str, Any]) -> tuple[str | None, float, 
         return "MERCHANT_PHONE", 0.94, "phone_context"
     if re.search(r"\b(dia chi|address)\b", norm):
         return "MERCHANT_ADDRESS", 0.92, "address_keyword"
+    if region == "header":
+        address_score = sum(1 for token in address_tokens if token in keyword_blob)
+        if address_score >= 2 and any(ch.isdigit() for ch in text):
+            return "MERCHANT_ADDRESS", 0.9, "header_address_pattern"
     if re.search(r"\b(hoa don|invoice|bill no|so hd|ma hd|ref)\b", norm):
         return "INVOICE_ID", 0.92, "invoice_keyword"
+    if re.fullmatch(r"[0-9A-Za-z\-_/]{3,30}", text.strip()) and any(x in around for x in ["so hd", "hoa don", "invoice", "ma hd", "ref"]):
+        return "INVOICE_ID", 0.88, "invoice_value_context"
 
     if node["is_money_like"]:
         if any(x in around for x in ["giam gia", "discount"]):
@@ -1192,16 +1240,90 @@ def _heuristic_label_for_node(node: dict[str, Any]) -> tuple[str | None, float, 
             if "dia chi" in around:
                 return "MERCHANT_ADDRESS", 0.8, "header_address_context"
     if region == "items":
+        if any(token in norm for token in header_row_tokens):
+            return "OTHER", 0.95, "item_table_header"
         if any(x in column_hint for x in ["ten hang", "mat hang", "item", "hang"]):
             if any(ch.isalpha() for ch in norm):
+                if any(token in norm for token in ["khach hang", "thu ngan", "thoi gian", "so hd", "hoa don"]):
+                    return "OTHER", 0.92, "item_column_but_admin_text"
                 return "ITEM_NAME", 0.88, "item_name_column"
         if any(ch.isalpha() for ch in norm) and not node["is_money_like"]:
+            if len(norm.split()) <= 2 and item_modifier_pattern.search(norm):
+                return "OTHER", 0.94, "short_item_modifier"
+            if sum(1 for token in admin_tokens if token in keyword_blob) >= 1:
+                return "OTHER", 0.84, "admin_text_in_items_region"
             return "ITEM_NAME", 0.62, "item_alpha_fallback"
 
     return None, 0.0, "needs_llm"
 
-
 def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    row_to_node = {n["row_number"]: n for n in nodes}
+    line_to_nodes: dict[int, list[dict[str, Any]]] = {}
+    for node in nodes:
+        line_id = int(node.get("line_id", -1))
+        line_to_nodes.setdefault(line_id, []).append(node)
+    for line_nodes in line_to_nodes.values():
+        line_nodes.sort(key=lambda x: x.get("line_pos", 0))
+
+    def _compact_node(n: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "row_number": n["row_number"],
+            "text": n["text"],
+            "region": n.get("line_region"),
+            "column_hint": n.get("column_hint", ""),
+            "bbox_norm": [n["nx1"], n["ny1"], n["nx2"], n["ny2"]],
+            "heuristic_label": n.get("heuristic_label"),
+            "heuristic_confidence": round(float(n.get("heuristic_confidence", 0.0)), 4),
+            "heuristic_reason": n.get("heuristic_reason", ""),
+            "current_label": n.get("label", ""),
+        }
+
+    def _target_context(n: dict[str, Any]) -> dict[str, Any]:
+        line_id = int(n.get("line_id", -1))
+        same_line_nodes = line_to_nodes.get(line_id, [])
+        prev_line_nodes = line_to_nodes.get(line_id - 1, [])
+        next_line_nodes = line_to_nodes.get(line_id + 1, [])
+        seeded_same_line = [
+            _compact_node(x)
+            for x in same_line_nodes
+            if x["row_number"] != n["row_number"] and x.get("heuristic_label") and float(x.get("heuristic_confidence", 0.0)) >= 0.75
+        ][:8]
+        vertical_neighbors = []
+        for key in ("top_text", "bottom_text"):
+            txt = str(n.get(key, "")).strip()
+            if not txt:
+                continue
+            vertical_neighbors.append({"direction": key.replace("_text", ""), "text": txt})
+        return {
+            "target": {
+                "row_number": n["row_number"],
+                "text": n["text"],
+                "bbox_norm": [n["nx1"], n["ny1"], n["nx2"], n["ny2"]],
+                "line_id": line_id,
+                "line_region": n.get("line_region"),
+                "row_role_hint": n.get("row_role_hint"),
+                "column_hint": n.get("column_hint", ""),
+                "ocr_score": n.get("score", 1.0),
+                "heuristic_label": n.get("heuristic_label"),
+                "heuristic_confidence": round(float(n.get("heuristic_confidence", 0.0)), 4),
+                "heuristic_reason": n.get("heuristic_reason", ""),
+                "current_label": n.get("label", ""),
+                "is_money_like": n.get("is_money_like"),
+                "is_date_like": n.get("is_date_like"),
+                "is_time_like": n.get("is_time_like"),
+                "is_phone_like": n.get("is_phone_like"),
+                "is_tax_code_like": n.get("is_tax_code_like"),
+            },
+            "same_line_texts": n.get("same_line_texts", []),
+            "same_line_nodes": [_compact_node(x) for x in same_line_nodes[:12]],
+            "same_line_seeded": seeded_same_line,
+            "prev_line_texts": [x["text"] for x in prev_line_nodes[:12]],
+            "next_line_texts": [x["text"] for x in next_line_nodes[:12]],
+            "left_text": n.get("left_text", ""),
+            "right_text": n.get("right_text", ""),
+            "vertical_neighbors": vertical_neighbors,
+        }
+
     compact_nodes = [
         {
             "row_number": n["row_number"],
@@ -1255,10 +1377,21 @@ def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[
         for n in nodes
         if n.get("heuristic_label")
     ]
+    focus_contexts = [_target_context(n) for n in target_nodes]
+    seeded_by_label: dict[str, list[dict[str, Any]]] = {}
+    for n in nodes:
+        label = str(n.get("heuristic_label") or "").strip()
+        if not label:
+            continue
+        seeded_by_label.setdefault(label, [])
+        if len(seeded_by_label[label]) < 8:
+            seeded_by_label[label].append(_compact_node(n))
     return {
         "document_nodes": compact_nodes,
         "seeded_nodes": seeded_nodes[:80],
         "target_nodes": detailed_targets,
+        "target_contexts": focus_contexts,
+        "seeded_examples_by_label": seeded_by_label,
     }
 
 
@@ -1284,14 +1417,38 @@ def _llm_suggest_labels_for_doc(
             "You will also receive heuristic labels already assigned to many nodes in the same document.",
             "Treat high-confidence heuristic labels on nearby nodes as strong context for classifying target nodes.",
             "If a target node itself has a heuristic_label with high confidence, keep it unless surrounding document structure strongly contradicts it.",
+            "Do not classify nodes as if they were isolated strings. Always reason from the whole line, nearby lines, region, and column role.",
+            "When same-line seeded nodes already indicate an item row structure, infer the remaining target node by column role and neighboring seeded nodes.",
+            "If one OCR node contains multiple header/admin fields merged together, such as time + invoice id + extra metadata in one text block, prefer OTHER unless one label is overwhelmingly dominant.",
             "A numeric text alone is ambiguous. Do not classify money values from text alone.",
             "If a money value is in item rows near quantity/unit price/amount columns, prefer ITEM_QTY / ITEM_UNIT_PRICE / ITEM_AMOUNT.",
             "If a money value is in summary area near Tong cong / Tam tinh / VAT / Giam gia / Thanh toan, prefer the corresponding summary label.",
             "Merchant info usually appears near the top; payment method and final totals usually appear near the bottom.",
+            "Short product modifiers such as (V?a), (L?n), n?ng, l?nh, ?t ??, ?t ???ng are usually OTHER, not ITEM_NAME.",
+            "Customer lines, notes, and mixed administrative lines containing time + invoice id + other header metadata should usually be OTHER unless one field is clearly isolated.",
+            "Address labels should be used only for store address-like text, usually in header region with street/district/city patterns or explicit address keywords.",
+            "Do not label table headers such as Ten mon, SL, D.Gia, T.Tien as ITEM_NAME; these are structure/header nodes and should be OTHER.",
+            "If a node is likely just a product variant, size, topping, or modifier and not the core product name, prefer OTHER.",
+            "If heuristic and structure disagree, trust structure over lexical similarity.",
             "If still uncertain, use OTHER.",
             "Do not invent new labels.",
             "If uncertain, use OTHER.",
         ],
+        "decision_policy": {
+            "priority_order": [
+                "document_region",
+                "same_line_structure",
+                "neighbor_seed_labels",
+                "column_hint",
+                "target_heuristic",
+                "raw_text_pattern",
+            ],
+            "overwrite_heuristic_when": [
+                "heuristic says ITEM_NAME but node is table header/customer/admin/mixed metadata",
+                "heuristic says ITEM_NAME but node is short size/modifier text",
+                "heuristic says OTHER but line/column structure clearly implies merchant address / item qty / item unit price / item amount / total amount",
+            ],
+        },
         "few_shot_examples": [
             {
                 "node_text": "1500000",
@@ -1324,6 +1481,30 @@ def _llm_suggest_labels_for_doc(
                 "same_line_texts": ["Điện thoại", "0988123456"],
                 "region": "header",
                 "expected_label": "MERCHANT_PHONE",
+            },
+            {
+                "node_text": "19403 Phan Huy Ich, P.14, Q. Go Vap",
+                "same_line_texts": ["THE COFFEE HOUSE", "19403 Phan Huy Ich, P.14, Q. Go Vap"],
+                "region": "header",
+                "expected_label": "MERCHANT_ADDRESS",
+            },
+            {
+                "node_text": "(Vua)",
+                "same_line_texts": ["Ca phe sua da", "(Vua)", "1", "35000", "35000"],
+                "region": "items",
+                "expected_label": "OTHER",
+            },
+            {
+                "node_text": "Khach hang: Phanh",
+                "same_line_texts": ["Khach hang", "Phanh"],
+                "region": "header",
+                "expected_label": "OTHER",
+            },
+            {
+                "node_text": "1980 Thoi gian:30.09.2020 08.29 So HD:19809053062020",
+                "same_line_texts": ["Thoi gian", "30.09.2020 08.29", "So HD", "19809053062020"],
+                "region": "header",
+                "expected_label": "OTHER",
             },
             {
                 "description": "Use neighboring seeded nodes as context",
@@ -2100,7 +2281,9 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
         "mode": "ocr_ai_preview" if use_ai else "ocr_preview",
         "doc_id": doc_id,
         "image_path": _project_relative_path(image_path),
+        "original_image_path": _project_relative_path(image_path),
         "preview_path": preview_image_rel,
+        "normalized_image_path": preview_image_rel,
         "ocr_boxes_image": debug_image_rel,
         "ocr_config": ocr_overrides,
         "artifacts": {

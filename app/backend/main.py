@@ -10,6 +10,7 @@ import csv
 import re
 import sys
 import random
+import unicodedata
 from urllib import request as urllib_request
 from datetime import datetime
 from pathlib import Path
@@ -87,6 +88,7 @@ class JobRequest(BaseModel):
 class GcnInferRequest(BaseModel):
     image: str
     lang: str = "en"
+    ocr_engine: str = "paddle"
     checkpoint: str | None = None
     ocr_debug_image: str = "outputs/ocr_boxes.jpg"
     output_json: str = "outputs/ocr_result.json"
@@ -96,6 +98,7 @@ class PretrainedRequest(BaseModel):
     image: str
     project_dir: str = "."
     lang: str = "en"
+    ocr_engine: str = "paddle"
     ocr_debug_image: str = "outputs/ocr_boxes_pretrained.jpg"
     output_json: str = "outputs/pretrained_invoice_result.json"
 
@@ -210,10 +213,24 @@ class LabelingGraphInspectRequest(BaseModel):
     near_threshold: float = 250.0
 
 
+class SingleImagePreviewRequest(BaseModel):
+    image: str
+    lang: str = "vi"
+    ocr_engine: str = "paddle"
+    with_ai: int = 0
+    llm_model: str = "gpt-4.1-mini"
+    output_dir: str = "data/single_image_check"
+    save_debug_image: int = 1
+    same_line_ratio: float = 1.2
+    near_threshold: float = 250.0
+    llm_text_batch_size: int = 10
+
+
 class PrepareOcrLabelingRequest(BaseModel):
     input_dir: str
     output_dir: str = "data/labeling_stage_b"
     lang: str = "en"
+    ocr_engine: str = "paddle"
     save_debug_images: int = 1
     copy_images: int = 1
 
@@ -376,6 +393,17 @@ def _build_subprocess_env() -> dict[str, str]:
     env["PYTHONHOME"] = ""
     env["PYTHONPATH"] = str(SRC_DIR)
     return env
+
+
+def _project_relative_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(SRC_DIR.resolve())).replace("\\", "/")
+    except ValueError:
+        try:
+            return str(resolved.relative_to(ROOT.resolve())).replace("\\", "/")
+        except ValueError:
+            return str(resolved).replace("\\", "/")
 
 
 def _stage_b_image_index() -> list[Path]:
@@ -831,20 +859,442 @@ def _extract_json_array(raw_text: str) -> list[str]:
     return out
 
 
-def _llm_suggest_labels(texts: list[str], labels: list[str], model: str) -> list[str]:
+def _strip_accents(text: str) -> str:
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", text or "") if unicodedata.category(ch) != "Mn"
+    )
+
+
+def _norm_text(text: str) -> str:
+    return re.sub(r"\s+", " ", _strip_accents(text).lower()).strip()
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return default
+
+
+def _money_like(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    return bool(re.fullmatch(r"[-+]?\d[\d.,:/-]*", t)) and any(ch.isdigit() for ch in t)
+
+
+def _date_like(text: str) -> bool:
+    return bool(re.search(r"\b\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?\b", text or ""))
+
+
+def _time_like(text: str) -> bool:
+    return bool(re.search(r"\b([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?\b", text or ""))
+
+
+def _phone_like(text: str) -> bool:
+    t = (text or "").strip()
+    digits = re.sub(r"\D", "", t)
+    return 8 <= len(digits) <= 15
+
+
+def _tax_code_like(text: str) -> bool:
+    digits = re.sub(r"\D", "", text or "")
+    return 8 <= len(digits) <= 14
+
+
+def _build_line_groups(nodes: list[dict[str, Any]]) -> list[list[int]]:
+    if not nodes:
+        return []
+    sorted_ids = sorted(range(len(nodes)), key=lambda i: (nodes[i]["cy"], nodes[i]["cx"]))
+    heights = sorted(max(1.0, n["h"]) for n in nodes)
+    median_h = heights[len(heights) // 2] if heights else 20.0
+    threshold = max(10.0, median_h * 0.65)
+    groups: list[list[int]] = []
+    current: list[int] = []
+    current_cy = None
+    for idx in sorted_ids:
+        cy = nodes[idx]["cy"]
+        if current_cy is None or abs(cy - current_cy) <= threshold:
+            current.append(idx)
+            current_cy = cy if current_cy is None else (current_cy * (len(current) - 1) + cy) / len(current)
+        else:
+            groups.append(sorted(current, key=lambda i: nodes[i]["cx"]))
+            current = [idx]
+            current_cy = cy
+    if current:
+        groups.append(sorted(current, key=lambda i: nodes[i]["cx"]))
+    return groups
+
+
+def _doc_context_from_rows(
+    rows: list[dict[str, Any]],
+    row_indices: list[int],
+    *,
+    text_col: str,
+    label_col: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    max_x = 1.0
+    max_y = 1.0
+    for ridx in row_indices:
+        row = rows[ridx]
+        x1 = _safe_float(row.get("x1"))
+        y1 = _safe_float(row.get("y1"))
+        x2 = _safe_float(row.get("x2"))
+        y2 = _safe_float(row.get("y2"))
+        max_x = max(max_x, x1, x2)
+        max_y = max(max_y, y1, y2)
+        nodes.append(
+            {
+                "csv_index": ridx,
+                "row_number": ridx + 2,
+                "text": str(row.get(text_col, "") or "").strip(),
+                "label": str(row.get(label_col, "") or "").strip().upper(),
+                "score": _safe_float(row.get("score"), 1.0),
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "w": max(0.0, x2 - x1),
+                "h": max(0.0, y2 - y1),
+                "cx": (x1 + x2) / 2.0,
+                "cy": (y1 + y2) / 2.0,
+            }
+        )
+
+    for node in nodes:
+        node["nx1"] = round(node["x1"] / max_x, 4)
+        node["ny1"] = round(node["y1"] / max_y, 4)
+        node["nx2"] = round(node["x2"] / max_x, 4)
+        node["ny2"] = round(node["y2"] / max_y, 4)
+        node["ncx"] = round(node["cx"] / max_x, 4)
+        node["ncy"] = round(node["cy"] / max_y, 4)
+        node["nw"] = round(node["w"] / max_x, 4)
+        node["nh"] = round(node["h"] / max_y, 4)
+        node["norm_text"] = _norm_text(node["text"])
+        node["is_money_like"] = _money_like(node["text"])
+        node["is_date_like"] = _date_like(node["text"])
+        node["is_time_like"] = _time_like(node["text"])
+        node["is_phone_like"] = _phone_like(node["text"])
+        node["is_tax_code_like"] = _tax_code_like(node["text"])
+
+    line_groups = _build_line_groups(nodes)
+    summary_words = [
+        "tong cong",
+        "tong tien",
+        "thanh tien",
+        "tam tinh",
+        "subtotal",
+        "vat",
+        "thue",
+        "giam gia",
+        "discount",
+        "phi dich vu",
+        "service fee",
+        "tien khach tra",
+        "tien mat",
+        "thoi lai",
+        "can thanh toan",
+        "thanh toan",
+    ]
+    item_header_words = ["ten hang", "mat hang", "sl", "so luong", "dvt", "don gia", "thanh tien", "qty", "amount"]
+
+    summary_line_ids: set[int] = set()
+    item_header_line_id: int | None = None
+    for line_id, group in enumerate(line_groups):
+        line_text = " | ".join(nodes[i]["norm_text"] for i in group if nodes[i]["norm_text"])
+        if any(word in line_text for word in summary_words):
+            summary_line_ids.add(line_id)
+        if item_header_line_id is None and sum(1 for word in item_header_words if word in line_text) >= 2:
+            item_header_line_id = line_id
+
+    first_summary_line = min(summary_line_ids) if summary_line_ids else max(0, int(len(line_groups) * 0.7))
+    header_boundary = item_header_line_id if item_header_line_id is not None else max(1, int(len(line_groups) * 0.25))
+
+    line_meta: list[dict[str, Any]] = []
+    for line_id, group in enumerate(line_groups):
+        texts = [nodes[i]["text"] for i in group]
+        line_text = " | ".join(texts)
+        if line_id < header_boundary:
+            region = "header"
+        elif line_id >= first_summary_line:
+            region = "summary"
+        else:
+            region = "items"
+        line_meta.append({"line_id": line_id, "texts": texts, "text": line_text, "region": region})
+        for pos, idx in enumerate(group):
+            node = nodes[idx]
+            node["line_id"] = line_id
+            node["line_region"] = region
+            node["line_pos"] = pos
+            node["same_line_texts"] = texts[:]
+            node["left_text"] = texts[pos - 1] if pos > 0 else ""
+            node["right_text"] = texts[pos + 1] if pos + 1 < len(texts) else ""
+
+    for node in nodes:
+        same_column = []
+        for other in nodes:
+            if other is node:
+                continue
+            if abs(other["ncx"] - node["ncx"]) <= 0.08:
+                same_column.append(other)
+        above = [x for x in same_column if x["ncy"] < node["ncy"]]
+        below = [x for x in same_column if x["ncy"] > node["ncy"]]
+        above.sort(key=lambda x: node["ncy"] - x["ncy"])
+        below.sort(key=lambda x: x["ncy"] - node["ncy"])
+        node["top_text"] = above[0]["text"] if above else ""
+        node["bottom_text"] = below[0]["text"] if below else ""
+
+        column_hint = ""
+        if item_header_line_id is not None and node["line_region"] == "items":
+            headers = line_groups[item_header_line_id]
+            best = None
+            best_dist = 999.0
+            for hidx in headers:
+                header_node = nodes[hidx]
+                dist = abs(header_node["ncx"] - node["ncx"])
+                if dist < best_dist:
+                    best_dist = dist
+                    best = header_node["norm_text"]
+            column_hint = best or ""
+        node["column_hint"] = column_hint
+
+        if node["line_region"] == "summary":
+            node["row_role_hint"] = "summary_area"
+        elif node["line_region"] == "header":
+            node["row_role_hint"] = "header_area"
+        elif column_hint:
+            node["row_role_hint"] = f"item_row:{column_hint}"
+        else:
+            node["row_role_hint"] = "item_row"
+
+    doc_summary = {
+        "line_count": len(line_groups),
+        "header_lines": [x["text"] for x in line_meta[: min(6, len(line_meta))]],
+        "summary_lines": [x["text"] for x in line_meta[first_summary_line : first_summary_line + 6]],
+        "item_header_line": line_meta[item_header_line_id]["text"] if item_header_line_id is not None else "",
+        "detected_regions": {
+            "header_end_line": header_boundary,
+            "summary_start_line": first_summary_line,
+        },
+    }
+    return nodes, doc_summary
+
+
+def _heuristic_label_for_node(node: dict[str, Any]) -> tuple[str | None, float, str]:
+    text = node["text"]
+    norm = node["norm_text"]
+    left = _norm_text(node.get("left_text", ""))
+    right = _norm_text(node.get("right_text", ""))
+    same_line = " | ".join(_norm_text(x) for x in node.get("same_line_texts", []))
+    around = " | ".join(filter(None, [left, right, _norm_text(node.get("top_text", "")), _norm_text(node.get("bottom_text", "")), same_line]))
+    region = node.get("line_region", "")
+    column_hint = node.get("column_hint", "")
+
+    if not text.strip():
+        return "OTHER", 1.0, "empty_text"
+    if node["is_date_like"]:
+        return "DATE", 0.98, "date_pattern"
+    if node["is_time_like"]:
+        return "TIME", 0.98, "time_pattern"
+    if re.search(r"\b(cash|momo|zalopay|gopay|gojek|visa|mastercard|atm|card|chuyen khoan|tien mat)\b", norm):
+        return "PAYMENT_METHOD", 0.98, "payment_keyword"
+    if re.search(r"\b(cashier|thu ngan|quay|counter)\b", norm):
+        return "CASHIER", 0.95, "cashier_keyword"
+    if re.search(r"\b(mst|ma so thue|tax code)\b", norm) or (
+        node["is_tax_code_like"] and ("thue" in around or "mst" in around)
+    ):
+        return "TAX_CODE", 0.95, "tax_context"
+    if re.search(r"\b(dien thoai|phone|tel|hotline|sdt)\b", norm) or (
+        node["is_phone_like"] and any(x in around for x in ["dien thoai", "phone", "tel", "hotline", "sdt"])
+    ):
+        return "MERCHANT_PHONE", 0.94, "phone_context"
+    if re.search(r"\b(dia chi|address)\b", norm):
+        return "MERCHANT_ADDRESS", 0.92, "address_keyword"
+    if re.search(r"\b(hoa don|invoice|bill no|so hd|ma hd|ref)\b", norm):
+        return "INVOICE_ID", 0.92, "invoice_keyword"
+
+    if node["is_money_like"]:
+        if any(x in around for x in ["giam gia", "discount"]):
+            return "DISCOUNT", 0.96, "discount_context"
+        if any(x in around for x in ["vat", "thue"]):
+            return "TAX_AMOUNT", 0.96, "tax_amount_context"
+        if any(x in around for x in ["phi dich vu", "service fee"]):
+            return "SERVICE_FEE", 0.96, "service_fee_context"
+        if any(x in around for x in ["tam tinh", "subtotal"]):
+            return "SUBTOTAL", 0.96, "subtotal_context"
+        if any(x in around for x in ["tong cong", "tong tien", "can thanh toan", "thanh toan", "tong thanh toan"]):
+            return "TOTAL_AMOUNT", 0.97, "total_context"
+        if region == "items":
+            if any(x in column_hint for x in ["sl", "so luong", "qty"]):
+                return "ITEM_QTY", 0.93, "item_qty_column"
+            if any(x in column_hint for x in ["don gia", "price"]):
+                return "ITEM_UNIT_PRICE", 0.93, "item_unit_price_column"
+            if any(x in column_hint for x in ["thanh tien", "amount"]):
+                return "ITEM_AMOUNT", 0.93, "item_amount_column"
+        if region == "summary":
+            return "TOTAL_AMOUNT", 0.65, "summary_money_fallback"
+
+    if region == "header":
+        if len(norm) >= 6 and any(ch.isalpha() for ch in norm):
+            if any(x in norm for x in ["vin", "mart", "co.op", "minimart", "store", "shop", "coffee", "tra sua", "quan"]):
+                return "MERCHANT_NAME", 0.85, "merchant_name_like"
+            if "dia chi" in around:
+                return "MERCHANT_ADDRESS", 0.8, "header_address_context"
+    if region == "items":
+        if any(x in column_hint for x in ["ten hang", "mat hang", "item", "hang"]):
+            if any(ch.isalpha() for ch in norm):
+                return "ITEM_NAME", 0.88, "item_name_column"
+        if any(ch.isalpha() for ch in norm) and not node["is_money_like"]:
+            return "ITEM_NAME", 0.62, "item_alpha_fallback"
+
+    return None, 0.0, "needs_llm"
+
+
+def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    compact_nodes = [
+        {
+            "row_number": n["row_number"],
+            "text": n["text"],
+            "line_id": n.get("line_id"),
+            "region": n.get("line_region"),
+            "column_hint": n.get("column_hint", ""),
+            "bbox_norm": [n["nx1"], n["ny1"], n["nx2"], n["ny2"]],
+            "current_label": n.get("label", ""),
+            "heuristic_label": n.get("heuristic_label"),
+            "heuristic_confidence": n.get("heuristic_confidence", 0.0),
+            "heuristic_reason": n.get("heuristic_reason", ""),
+        }
+        for n in nodes
+    ]
+    detailed_targets = [
+        {
+            "row_number": n["row_number"],
+            "text": n["text"],
+            "bbox_norm": [n["nx1"], n["ny1"], n["nx2"], n["ny2"]],
+            "line_id": n.get("line_id"),
+            "line_region": n.get("line_region"),
+            "row_role_hint": n.get("row_role_hint"),
+            "column_hint": n.get("column_hint", ""),
+            "left_text": n.get("left_text", ""),
+            "right_text": n.get("right_text", ""),
+            "top_text": n.get("top_text", ""),
+            "bottom_text": n.get("bottom_text", ""),
+            "same_line_texts": n.get("same_line_texts", []),
+            "is_money_like": n.get("is_money_like"),
+            "is_date_like": n.get("is_date_like"),
+            "is_time_like": n.get("is_time_like"),
+            "is_phone_like": n.get("is_phone_like"),
+            "is_tax_code_like": n.get("is_tax_code_like"),
+            "ocr_score": n.get("score", 1.0),
+            "heuristic_label": n.get("heuristic_label"),
+            "heuristic_confidence": n.get("heuristic_confidence", 0.0),
+            "heuristic_reason": n.get("heuristic_reason", ""),
+        }
+        for n in target_nodes
+    ]
+    seeded_nodes = [
+        {
+            "row_number": n["row_number"],
+            "text": n["text"],
+            "heuristic_label": n.get("heuristic_label"),
+            "heuristic_confidence": n.get("heuristic_confidence", 0.0),
+            "region": n.get("line_region"),
+            "column_hint": n.get("column_hint", ""),
+        }
+        for n in nodes
+        if n.get("heuristic_label")
+    ]
+    return {
+        "document_nodes": compact_nodes,
+        "seeded_nodes": seeded_nodes[:80],
+        "target_nodes": detailed_targets,
+    }
+
+
+def _llm_suggest_labels_for_doc(
+    *,
+    doc_id: str,
+    doc_summary: dict[str, Any],
+    nodes: list[dict[str, Any]],
+    target_nodes: list[dict[str, Any]],
+    labels: list[str],
+    model: str,
+) -> dict[int, str]:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("Missing OPENAI_API_KEY")
 
     prompt = {
-        "task": "Classify each OCR text snippet into one label.",
+        "task": "Classify OCR nodes from one Vietnamese invoice/receipt using document structure, neighboring texts, line grouping, and node position.",
         "labels": labels,
         "rules": [
-            "Return exactly one label per input text.",
-            "Output JSON array only, no markdown, no explanation.",
+            "Return exactly one label per target node.",
+            "Use node position, same-line texts, left/right/top/bottom neighbors, and document region.",
+            "You will also receive heuristic labels already assigned to many nodes in the same document.",
+            "Treat high-confidence heuristic labels on nearby nodes as strong context for classifying target nodes.",
+            "If a target node itself has a heuristic_label with high confidence, keep it unless surrounding document structure strongly contradicts it.",
+            "A numeric text alone is ambiguous. Do not classify money values from text alone.",
+            "If a money value is in item rows near quantity/unit price/amount columns, prefer ITEM_QTY / ITEM_UNIT_PRICE / ITEM_AMOUNT.",
+            "If a money value is in summary area near Tong cong / Tam tinh / VAT / Giam gia / Thanh toan, prefer the corresponding summary label.",
+            "Merchant info usually appears near the top; payment method and final totals usually appear near the bottom.",
+            "If still uncertain, use OTHER.",
+            "Do not invent new labels.",
             "If uncertain, use OTHER.",
         ],
-        "inputs": texts,
+        "few_shot_examples": [
+            {
+                "node_text": "1500000",
+                "same_line_texts": ["Tổng cộng", "1500000"],
+                "region": "summary",
+                "expected_label": "TOTAL_AMOUNT",
+            },
+            {
+                "node_text": "1500000",
+                "same_line_texts": ["Coca Cola", "2", "750000", "1500000"],
+                "region": "items",
+                "column_hint": "thành tiền",
+                "expected_label": "ITEM_AMOUNT",
+            },
+            {
+                "node_text": "750000",
+                "same_line_texts": ["Coca Cola", "2", "750000", "1500000"],
+                "region": "items",
+                "column_hint": "đơn giá",
+                "expected_label": "ITEM_UNIT_PRICE",
+            },
+            {
+                "node_text": "7/06/2026",
+                "same_line_texts": ["Ngày", "7/06/2026"],
+                "region": "header",
+                "expected_label": "DATE",
+            },
+            {
+                "node_text": "0988123456",
+                "same_line_texts": ["Điện thoại", "0988123456"],
+                "region": "header",
+                "expected_label": "MERCHANT_PHONE",
+            },
+            {
+                "description": "Use neighboring seeded nodes as context",
+                "seeded_nodes": [
+                    {"text": "SL", "heuristic_label": "OTHER"},
+                    {"text": "Đơn giá", "heuristic_label": "OTHER"},
+                    {"text": "Thành tiền", "heuristic_label": "OTHER"},
+                    {"text": "Coca Cola", "heuristic_label": "ITEM_NAME"},
+                    {"text": "2", "heuristic_label": "ITEM_QTY"},
+                ],
+                "target_node": {
+                    "node_text": "1500000",
+                    "region": "items",
+                    "column_hint": "thành tiền",
+                },
+                "expected_label": "ITEM_AMOUNT",
+            },
+        ],
+        "doc_id": doc_id,
+        "document_summary": doc_summary,
+        "context": _build_doc_llm_payload(nodes, target_nodes),
     }
 
     body = {
@@ -852,11 +1302,20 @@ def _llm_suggest_labels(texts: list[str], labels: list[str], model: str) -> list
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": "You are an invoice entity labeler."},
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert Vietnamese invoice OCR node labeler. "
+                    "You classify OCR nodes inside a document, not isolated strings."
+                ),
+            },
             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             {
                 "role": "user",
-                "content": "Return JSON object: {\"labels\": [\"...\", ...]} with same length as inputs.",
+                "content": (
+                    "Return JSON object only with this schema: "
+                    "{\"labels\": [{\"row_number\": 12, \"label\": \"TOTAL_AMOUNT\"}, ...]}"
+                ),
             },
         ],
     }
@@ -876,14 +1335,19 @@ def _llm_suggest_labels(texts: list[str], labels: list[str], model: str) -> list
     obj = json.loads(content)
     arr = obj.get("labels", [])
     if not isinstance(arr, list):
-        arr = _extract_json_array(content)
-    out = [str(x).strip().upper() if str(x).strip().upper() in labels else "OTHER" for x in arr]
-    if len(out) < len(texts):
-        # Some models occasionally return fewer labels than requested.
-        # Keep the valid prefix and backfill the remainder with deterministic rules.
-        out.extend(_suggest_label_from_text(t) for t in texts[len(out) :])
-    elif len(out) > len(texts):
-        out = out[: len(texts)]
+        raise ValueError("LLM output must contain labels list")
+    out: dict[int, str] = {}
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        try:
+            row_number = int(item.get("row_number"))
+        except Exception:
+            continue
+        label = str(item.get("label", "")).strip().upper()
+        if label not in labels:
+            label = "OTHER"
+        out[row_number] = label
     return out
 
 
@@ -893,6 +1357,101 @@ def _ensure_openai_api_key() -> None:
             status_code=400,
             detail="Missing OPENAI_API_KEY. Add it to DATN/.env or current environment, then restart backend.",
         )
+
+
+def _suggest_labels_for_document(
+    rows: list[dict[str, Any]],
+    row_indices: list[int],
+    *,
+    text_col: str,
+    label_col: str,
+    llm_model: str,
+    use_llm: bool,
+    max_targets_per_request: int,
+) -> tuple[dict[int, str], dict[str, Any]]:
+    nodes, doc_summary = _doc_context_from_rows(rows, row_indices, text_col=text_col, label_col=label_col)
+    row_to_node = {node["row_number"]: node for node in nodes}
+    assigned: dict[int, str] = {}
+    llm_targets: list[dict[str, Any]] = []
+    heuristic_hits = 0
+
+    for node in nodes:
+        label, confidence, reason = _heuristic_label_for_node(node)
+        node["heuristic_label"] = label
+        node["heuristic_confidence"] = confidence
+        node["heuristic_reason"] = reason
+        if label and confidence >= 0.9:
+            assigned[node["row_number"]] = label
+            heuristic_hits += 1
+        else:
+            llm_targets.append(node)
+
+    strategy_used = "heuristic"
+    llm_batches = 0
+    llm_errors: list[str] = []
+    if llm_targets and use_llm:
+        strategy_used = "llm+heuristic"
+        for s in range(0, len(llm_targets), max_targets_per_request):
+            chunk = llm_targets[s : s + max_targets_per_request]
+            try:
+                llm_map = _llm_suggest_labels_for_doc(
+                    doc_id=str(rows[row_indices[0]].get("doc_id", "UNKNOWN_DOC")),
+                    doc_summary=doc_summary,
+                    nodes=nodes,
+                    target_nodes=chunk,
+                    labels=INVOICE_LABELS,
+                    model=llm_model,
+                )
+                llm_batches += 1
+                for node in chunk:
+                    assigned[node["row_number"]] = llm_map.get(
+                        node["row_number"],
+                        _suggest_label_from_text(node["text"]),
+                    )
+            except Exception as exc:
+                llm_errors.append(str(exc))
+                strategy_used = "heuristic+rule_fallback"
+                for node in chunk:
+                    fallback = node.get("heuristic_label") or _suggest_label_from_text(node["text"])
+                    assigned[node["row_number"]] = fallback
+    else:
+        for node in llm_targets:
+            assigned[node["row_number"]] = node.get("heuristic_label") or _suggest_label_from_text(node["text"])
+
+    for row_number, label in list(assigned.items()):
+        if label not in INVOICE_LABELS:
+            assigned[row_number] = "OTHER"
+
+    stats = {
+        "heuristic_hits": heuristic_hits,
+        "llm_targets": len(llm_targets),
+        "llm_batches": llm_batches,
+        "strategy_used": strategy_used,
+        "llm_errors": llm_errors,
+        "doc_summary": doc_summary,
+        "target_preview": [
+            {
+                "row_number": node["row_number"],
+                "text": node["text"],
+                "region": node.get("line_region"),
+                "column_hint": node.get("column_hint", ""),
+                "heuristic_label": node.get("heuristic_label"),
+                "heuristic_confidence": node.get("heuristic_confidence"),
+            }
+            for node in llm_targets[:8]
+        ],
+        "assigned_preview": [
+            {
+                "row_number": node["row_number"],
+                "text": node["text"],
+                "label": assigned.get(node["row_number"], "OTHER"),
+                "line_region": node.get("line_region"),
+                "column_hint": node.get("column_hint", ""),
+            }
+            for node in nodes[:10]
+        ],
+    }
+    return assigned, stats
 
 
 def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
@@ -912,7 +1471,7 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
     only_empty = True
     llm_model = args.get("llm_model", "gpt-4.1-mini")
     batch_docs = max(1, min(int(args.get("batch_docs", 10)), 50))
-    llm_text_batch_size = max(1, min(int(args.get("llm_text_batch_size", 30)), 100))
+    llm_text_batch_size = max(1, min(int(args.get("llm_text_batch_size", 10)), 50))
     require_llm = int(args.get("require_llm", 1)) == 1
 
     try:
@@ -950,38 +1509,37 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
 
         for s in range(0, total_docs, batch_docs):
             batch_doc_ids = doc_ids[s : s + batch_docs]
-            batch_row_indices: list[int] = []
-            batch_texts: list[str] = []
+            strategy_used = "heuristic"
+            batch_row_total = 0
             for did in batch_doc_ids:
-                for ridx in grouped[did]:
-                    batch_row_indices.append(ridx)
-                    batch_texts.append(str(rows[ridx].get(text_col, "") or ""))
-
-            labels_out: list[str] = []
-            strategy_used = "llm"
-            for t in range(0, len(batch_texts), llm_text_batch_size):
-                try:
-                    labels_out.extend(
-                        _llm_suggest_labels(
-                            batch_texts[t : t + llm_text_batch_size],
-                            INVOICE_LABELS,
-                            llm_model,
-                        )
-                    )
-                except Exception as exc:
-                    strategy_used = "rule"
-                    fallback_batch = [_suggest_label_from_text(x) for x in batch_texts[t : t + llm_text_batch_size]]
-                    labels_out.extend(fallback_batch)
-                    logs.append(f"Batch {s//batch_docs + 1}: fallback rule ({exc})")
-
-            for pos, ridx in enumerate(batch_row_indices):
-                rows[ridx][label_col] = labels_out[pos]
+                doc_row_indices = grouped[did]
+                batch_row_total += len(doc_row_indices)
+                assigned, stats = _suggest_labels_for_document(
+                    rows,
+                    doc_row_indices,
+                    text_col=text_col,
+                    label_col=label_col,
+                    llm_model=llm_model,
+                    use_llm=require_llm,
+                    max_targets_per_request=llm_text_batch_size,
+                )
+                strategy_used = stats["strategy_used"]
+                for ridx in doc_row_indices:
+                    row_number = ridx + 2
+                    if row_number in assigned:
+                        rows[ridx][label_col] = assigned[row_number]
+                logs.append(
+                    f"doc={did} rows={len(doc_row_indices)} heuristic={stats['heuristic_hits']} "
+                    f"llm_targets={stats['llm_targets']} llm_batches={stats['llm_batches']} mode={stats['strategy_used']}"
+                )
+                if stats["llm_errors"]:
+                    logs.append(f"doc={did} llm_error={stats['llm_errors'][-1]}")
 
             done_docs += len(batch_doc_ids)
             pct = max(1, round((done_docs * 100) / total_docs)) if total_docs > 0 else 100
             _write_csv_rows(csv_path, fields, rows)
             logs.append(
-                f"[{done_docs}/{total_docs}] batch_docs={len(batch_doc_ids)} rows={len(batch_row_indices)} mode={strategy_used} saved=ok"
+                f"[{done_docs}/{total_docs}] batch_docs={len(batch_doc_ids)} rows={batch_row_total} mode={strategy_used} saved=ok"
             )
 
             jobs = _load_jobs()
@@ -1037,32 +1595,47 @@ def labeling_auto_suggest(req: AutoSuggestLabelsRequest) -> dict[str, Any]:
         rows = list(reader)
 
     targets: list[int] = []
-    texts: list[str] = []
     effective_only_empty = True
     for i, row in enumerate(rows):
         old_label = str(row.get(req.label_col, "")).strip()
         if effective_only_empty and old_label:
             continue
         targets.append(i)
-        texts.append(str(row.get(req.text_col, "") or ""))
 
     strategy_used = req.strategy
-    labels_out: list[str] = []
-    if texts:
-        if req.strategy == "llm":
-            try:
-                bsz = max(1, min(req.batch_size, 100))
-                for s in range(0, len(texts), bsz):
-                    batch = texts[s : s + bsz]
-                    labels_out.extend(_llm_suggest_labels(batch, INVOICE_LABELS, req.llm_model))
-            except Exception:
-                strategy_used = "rule"
-                labels_out = [_suggest_label_from_text(t) for t in texts]
-        else:
-            labels_out = [_suggest_label_from_text(t) for t in texts]
+    grouped: dict[str, list[int]] = {}
+    for idx in targets:
+        doc_id = str(rows[idx].get("doc_id", "") or "").strip() or "UNKNOWN_DOC"
+        grouped.setdefault(doc_id, []).append(idx)
 
-    for pos, idx in enumerate(targets):
-        rows[idx][req.label_col] = labels_out[pos]
+    meta: list[dict[str, Any]] = []
+    if targets:
+        for did, doc_row_indices in grouped.items():
+            assigned, stats = _suggest_labels_for_document(
+                rows,
+                doc_row_indices,
+                text_col=req.text_col,
+                label_col=req.label_col,
+                llm_model=req.llm_model,
+                use_llm=req.strategy == "llm",
+                max_targets_per_request=max(1, min(req.batch_size, 50)),
+            )
+            strategy_used = stats["strategy_used"]
+            for ridx in doc_row_indices:
+                row_number = ridx + 2
+                if row_number in assigned:
+                    rows[ridx][req.label_col] = assigned[row_number]
+            meta.append(
+                {
+                    "doc_id": did,
+                    "row_count": len(doc_row_indices),
+                    "heuristic_hits": stats["heuristic_hits"],
+                    "llm_targets": stats["llm_targets"],
+                    "llm_batches": stats["llm_batches"],
+                    "strategy_used": stats["strategy_used"],
+                    "llm_errors": stats["llm_errors"],
+                }
+            )
 
     with csv_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -1074,10 +1647,11 @@ def labeling_auto_suggest(req: AutoSuggestLabelsRequest) -> dict[str, Any]:
         "suggested_rows": len(targets),
         "strategy_requested": req.strategy,
         "strategy_used": strategy_used,
-        "llm_model": req.llm_model if strategy_used == "llm" else None,
+        "llm_model": req.llm_model if "llm" in strategy_used else None,
         "label_col": req.label_col,
         "only_empty_enforced": True,
         "labels": INVOICE_LABELS,
+        "doc_stats": meta[:30],
     }
 
 
@@ -1297,6 +1871,172 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
             "edge_index": edge_index,
             "adjacency_matrix": adjacency,
         },
+        "nodes": node_items,
+    }
+
+
+@app.post("/api/pipeline/single-image-preview")
+def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
+    from pipeline.services.ocr_service import OCRService
+
+    image_path = _resolve_project_path(req.image)
+    if not image_path.exists() or not image_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Image not found: {req.image}")
+
+    output_dir = _resolve_project_path(req.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ocr_service = OCRService()
+    ocr_nodes = ocr_service.run(str(image_path), lang=req.lang or "vi", engine=req.ocr_engine or "paddle")
+
+    doc_id = image_path.stem
+    rows: list[dict[str, Any]] = []
+    row_indices: list[int] = []
+    for idx, node in enumerate(ocr_nodes):
+        rows.append(
+            {
+                "doc_id": doc_id,
+                "text": node.text,
+                "label": "",
+                "x1": f"{node.x1:.2f}",
+                "y1": f"{node.y1:.2f}",
+                "x2": f"{node.x2:.2f}",
+                "y2": f"{node.y2:.2f}",
+                "score": f"{node.score:.4f}",
+            }
+        )
+        row_indices.append(idx)
+
+    use_ai = bool(req.with_ai)
+    assigned, ai_stats = _suggest_labels_for_document(
+        rows,
+        row_indices,
+        text_col="text",
+        label_col="label",
+        llm_model=req.llm_model,
+        use_llm=use_ai,
+        max_targets_per_request=max(1, min(int(req.llm_text_batch_size), 50)),
+    )
+    context_nodes, doc_summary = _doc_context_from_rows(rows, row_indices, text_col="text", label_col="label")
+    context_by_row = {node["row_number"]: node for node in context_nodes}
+    for node in context_nodes:
+        heuristic_label, heuristic_confidence, heuristic_reason = _heuristic_label_for_node(node)
+        node["heuristic_label"] = heuristic_label
+        node["heuristic_confidence"] = heuristic_confidence
+        node["heuristic_reason"] = heuristic_reason
+
+    feature_names = ["text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score"]
+    features = build_features(ocr_nodes).tolist() if ocr_nodes else []
+    edges = build_graph_edges(ocr_nodes, same_line_ratio=req.same_line_ratio, near_threshold=req.near_threshold)
+    edge_index = [[], []]
+    adjacency = [[0 for _ in range(len(ocr_nodes))] for _ in range(len(ocr_nodes))]
+    for src, dst, _dist in edges:
+        edge_index[0].append(src)
+        edge_index[1].append(dst)
+        adjacency[src][dst] = 1
+
+    if bool(req.save_debug_image):
+        debug_image_path = output_dir / f"{doc_id}_ocr_boxes.jpg"
+        ocr_service.save_debug_image(str(image_path), ocr_nodes, str(debug_image_path))
+        debug_image_rel = _project_relative_path(debug_image_path)
+    else:
+        debug_image_rel = ""
+
+    csv_preview_path = output_dir / f"{doc_id}_nodes_to_label.csv"
+    csv_fields = ["doc_id", "text", "label", "x1", "y1", "x2", "y2", "score"]
+    with csv_preview_path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=csv_fields)
+        writer.writeheader()
+        for idx, row in enumerate(rows):
+            row_number = idx + 2
+            writer.writerow(
+                {
+                    "doc_id": row["doc_id"],
+                    "text": row["text"],
+                    "label": assigned.get(row_number, "") if use_ai else "",
+                    "x1": row["x1"],
+                    "y1": row["y1"],
+                    "x2": row["x2"],
+                    "y2": row["y2"],
+                    "score": row["score"],
+                }
+            )
+
+    node_items: list[dict[str, Any]] = []
+    label_summary: dict[str, int] = {}
+    extracted_fields: dict[str, list[str]] = {}
+    for idx, node in enumerate(ocr_nodes):
+        row_number = idx + 2
+        ctx = context_by_row.get(row_number, {})
+        final_label = assigned.get(row_number, "") if use_ai else ""
+        suggested_label = assigned.get(row_number, "OTHER")
+        if final_label:
+            label_summary[final_label] = label_summary.get(final_label, 0) + 1
+            extracted_fields.setdefault(final_label, []).append(node.text)
+        node_items.append(
+            {
+                "node_index": idx,
+                "row_number": row_number,
+                "text": node.text,
+                "label": final_label,
+                "picked_label": final_label,
+                "suggested_label": suggested_label,
+                "heuristic_label": ctx.get("heuristic_label"),
+                "heuristic_confidence": ctx.get("heuristic_confidence"),
+                "heuristic_reason": ctx.get("heuristic_reason"),
+                "line_id": ctx.get("line_id"),
+                "line_region": ctx.get("line_region"),
+                "column_hint": ctx.get("column_hint"),
+                "row_role_hint": ctx.get("row_role_hint"),
+                "score": node.score,
+                "bbox": [node.x1, node.y1, node.x2, node.y2],
+                "features": features[idx] if idx < len(features) else [],
+            }
+        )
+
+    graph_preview_payload = {
+        "doc_id": doc_id,
+        "image_path": _project_relative_path(image_path),
+        "ocr_boxes_image": debug_image_rel,
+        "doc_summary": doc_summary,
+        "feature_names": feature_names,
+        "graph": {
+            "num_nodes": len(ocr_nodes),
+            "num_edges": len(edges),
+            "edge_index": edge_index,
+            "adjacency_matrix": adjacency,
+        },
+        "label_summary": label_summary,
+        "extracted_fields": extracted_fields,
+        "nodes": node_items,
+        "ai_stats": ai_stats,
+    }
+    graph_preview_path = output_dir / f"{doc_id}_graph_preview.json"
+    graph_preview_path.write_text(json.dumps(graph_preview_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {
+        "status": "ok",
+        "mode": "ocr_ai_preview" if use_ai else "ocr_preview",
+        "doc_id": doc_id,
+        "image_path": _project_relative_path(image_path),
+        "preview_path": _project_relative_path(image_path),
+        "ocr_boxes_image": debug_image_rel,
+        "artifacts": {
+            "train_b_csv_path": _project_relative_path(csv_preview_path),
+            "graph_json_path": _project_relative_path(graph_preview_path),
+            "output_dir": _project_relative_path(output_dir),
+        },
+        "doc_summary": doc_summary,
+        "feature_names": feature_names,
+        "graph": {
+            "num_nodes": len(ocr_nodes),
+            "num_edges": len(edges),
+            "edge_index": edge_index,
+            "adjacency_matrix": adjacency,
+        },
+        "label_summary": label_summary,
+        "extracted_fields": extracted_fields,
+        "ai_stats": ai_stats,
         "nodes": node_items,
     }
 

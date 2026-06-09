@@ -156,7 +156,7 @@ button.mini-chip{cursor:pointer}
 @media (max-width:1100px){.cards,.split,.inspect-grid,.doc-browser,.inspect-layout,.hero-train,.field-grid,.preset-grid,.doc-toolbar,.doc-pager,.results-grid,.metrics-grid,.image-compare,.kv,.review-shell,.node-filterbar,.compare-grid{grid-template-columns:1fr}}
 `;
 
-const NAV = [["prep", "Chuẩn bị dữ liệu"],["train", "Huấn luyện"],["results", "Kết quả & Đánh giá"]];
+const NAV = [["single", "Kiểm thử 1 ảnh"],["prep", "Chuẩn bị dữ liệu"],["train", "Huấn luyện"],["results", "Kết quả & Đánh giá"]];
 const LABELS = [
   "MERCHANT_NAME",
   "MERCHANT_ADDRESS",
@@ -347,7 +347,7 @@ function validateStageBEvalConfig(cfg){
 }
 
 function App(){
-  const [page,setPage]=useState("prep");
+  const [page,setPage]=useState("single");
   const [jobs,setJobs]=useState([]);
   const [out,setOut]=useState("");
   const [files,setFiles]=useState([]);
@@ -356,7 +356,7 @@ function App(){
   const [subdir,setSubdir]=useState("");
   const [recentRaw,setRecentRaw]=useState([]);
   const [allRawImages,setAllRawImages]=useState([]);
-  const [ocr,setOcr]=useState({input_dir:"data/stage_b_raw_images",output_dir:"data/labeling_stage_b",lang:"vi",save_debug_images:1,copy_images:1});
+  const [ocr,setOcr]=useState({input_dir:"data/stage_b_raw_images",output_dir:"data/labeling_stage_b",lang:"vi",ocr_engine:"paddle",save_debug_images:1,copy_images:1});
   const [dataset,setDataset]=useState({input_csv:"data/labeling_stage_b/nodes_to_label.csv",output_json:"data/stage_b_vi_dataset.json"});
   const [labelRows,setLabelRows]=useState([]);
   const [allowedLabels,setAllowedLabels]=useState(LABELS);
@@ -404,11 +404,29 @@ function App(){
   const [inferOne,setInferOne]=useState({
     image:"",
     lang:"vi",
+    ocr_engine:"paddle",
     checkpoint:"outputs/checkpoints/gcn_stage_b.pt",
     ocr_debug_image:"outputs/ocr_boxes_single.jpg",
     output_json:"outputs/gcn_infer_single.json",
   });
   const [inferUploadFile,setInferUploadFile]=useState(null);
+  const [singleCheck,setSingleCheck]=useState({
+    image:"",
+    lang:"vi",
+    ocr_engine:"paddle",
+    llm_model:"gpt-4.1-mini",
+    output_dir:"data/single_image_check",
+    save_debug_image:1,
+    same_line_ratio:1.2,
+    near_threshold:250,
+    llm_text_batch_size:10,
+  });
+  const [singleCheckUploadFile,setSingleCheckUploadFile]=useState(null);
+  const [singleInspect,setSingleInspect]=useState(null);
+  const [singleInspectLoading,setSingleInspectLoading]=useState(false);
+  const [singleInspectTab,setSingleInspectTab]=useState("ocr");
+  const [singleActiveNode,setSingleActiveNode]=useState(-1);
+  const [singleNatural,setSingleNatural]=useState({w:1,h:1});
   const [evalReport,setEvalReport]=useState(null);
   const [inferReport,setInferReport]=useState(null);
   const [knownDataFiles,setKnownDataFiles]=useState([]);
@@ -483,6 +501,11 @@ function App(){
       setInferActiveNode(inferReport.node_features[0].node_id);
     }
   },[inferReport]);
+  useEffect(()=>{
+    if((singleInspect?.nodes||[]).length && singleActiveNode < 0){
+      setSingleActiveNode(singleInspect.nodes[0].node_index);
+    }
+  },[singleInspect]);
   const statusClass=(s)=>s==="success"?"success":s==="failed"?"failed":s==="running"?"running":s==="queued"?"queued":"idle";
   const lastLog=(j)=>{if(!j) return "Chưa có log"; const t=(j.stderr||j.stdout||"").trim(); if(!t) return "Job đã tạo, đang chờ log..."; return t.split(/\r?\n/).slice(-25).join("\n");};
 
@@ -631,6 +654,55 @@ function App(){
   const loadInferReport=async()=>{
     const d = await loadJsonOutput(inferOne.output_json);
     if(d) setInferReport(d);
+  };
+  const uploadSingleCheckImage=async()=>{
+    if(!singleCheckUploadFile) return;
+    const fd = new FormData();
+    fd.append("files", singleCheckUploadFile);
+    fd.append("subdir", "single_check");
+    const r = await fetch("/api/files/upload-images",{method:"POST",body:fd});
+    const d = await r.json();
+    setOut(JSON.stringify(d,null,2));
+    if(r.ok && d.files?.[0]){
+      setSingleCheck(prev=>({...prev,image:d.files[0]}));
+      await loadRecentRaw();
+    }
+  };
+  const runSinglePreview=async(withAI=false)=>{
+    if(!String(singleCheck.image||"").trim()){
+      setOut(JSON.stringify({status:"blocked",stage:"single_image_preview",issues:["Thiếu đường dẫn ảnh để kiểm thử."]},null,2));
+      return;
+    }
+    setSingleInspectLoading(true);
+    setSingleInspectTab(withAI ? "ai" : "ocr");
+    setSingleActiveNode(-1);
+    try{
+      const r = await fetch("/api/pipeline/single-image-preview",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...singleCheck, with_ai: withAI ? 1 : 0}),
+      });
+      const d = await r.json();
+      setOut(JSON.stringify(d,null,2));
+      if(!r.ok){
+        setSingleInspect(null);
+        setLabelHint(`Lỗi kiểm thử 1 ảnh: ${d?.detail || "unknown"}`);
+        return;
+      }
+      setSingleInspect({
+        ...d,
+        nodes:(d.nodes||[]).map(node=>({
+          ...node,
+          picked_label: node.picked_label || node.label || "",
+        })),
+      });
+      await loadTrainFileOptions();
+    }catch(e){
+      setSingleInspect(null);
+      setLabelHint("Không gọi được API kiểm thử 1 ảnh.");
+    }finally{
+      setSingleInspectLoading(false);
+    }
   };
   const runTrainFull=async()=>{await apiPost("/api/pipeline/train-gcn-full", {...trainFull, init_checkpoint: trainFull.init_checkpoint || null, eval_json: trainFull.eval_json || null});};
   const loadByDoc=async(pageOverride=null)=>{
@@ -851,6 +923,22 @@ function App(){
     ()=> (inferReport?.node_features || []).filter(n=>n.changed_by_gcn).length,
     [inferReport]
   );
+  const singleActiveNodeData = useMemo(
+    ()=> (singleInspect?.nodes || []).find(n=>n.node_index===singleActiveNode) || null,
+    [singleInspect, singleActiveNode]
+  );
+  const singleLabelSummary = useMemo(
+    ()=> Object.entries(singleInspect?.label_summary || {}).sort((a,b)=>b[1]-a[1]),
+    [singleInspect]
+  );
+  const singleExtractedRows = useMemo(
+    ()=> Object.entries(singleInspect?.extracted_fields || {}).filter(([,vals])=>Array.isArray(vals) && vals.length>0),
+    [singleInspect]
+  );
+  const singleSuspiciousCount = useMemo(
+    ()=> (singleInspect?.nodes || []).filter(node=>reviewIssueForNode(node)).length,
+    [singleInspect]
+  );
 
   return <>
     <style>{css}</style>
@@ -869,7 +957,255 @@ function App(){
           <datalist id="known-checkpoint-files">
             {knownCheckpointFiles.map((f)=><option key={f} value={f} />)}
           </datalist>
-          {page==="train" ? <>
+          {page==="single" ? <>
+            <h2 className="title">Kiểm thử 1 ảnh trước khi train B</h2>
+            <div className="subtitle">Trang này dành riêng cho việc kiểm tra chất lượng từng bước trên đúng <b>1 ảnh</b>: OCR có bắt box tốt không, text OCR ra sao, AI gán nhãn thế nào, và dữ liệu graph cuối cùng sẽ đi vào train B trông ra sao. Mình dùng cùng logic thật của pipeline để bạn kiểm tra trước khi chạy batch lớn.</div>
+
+            <div className="step">
+              <div className="step-head"><h3>Cấu hình ảnh kiểm thử</h3><span className={`badge ${singleInspectLoading?"running":"idle"}`}>{singleInspectLoading?"RUNNING":"READY"}</span></div>
+              <div className="step-body">
+                <div className="field-grid">
+                  <TrainField label="Ảnh đã có trong project" hint="Bạn có thể chọn ảnh đã upload ở bước chuẩn bị dữ liệu hoặc ảnh trong thư mục thử nghiệm riêng.">
+                    <FileSelect value={singleCheck.image} onChange={(v)=>setSingleCheck({...singleCheck,image:v})} options={allRawImages} placeholder="-- chọn 1 ảnh để kiểm thử --" />
+                  </TrainField>
+                  <TrainField label="Ngôn ngữ OCR" hint="Nên để `vi` cho hóa đơn tiếng Việt có dấu.">
+                    <input className="input" value={singleCheck.lang} onChange={e=>setSingleCheck({...singleCheck,lang:e.target.value})} placeholder="vi" />
+                  </TrainField>
+                  <TrainField label="Engine OCR" hint="`paddle` là mặc định. `vietocr` sẽ dùng Paddle để detect box, sau đó VietOCR để đọc text trong từng box.">
+                    <select className="input" value={singleCheck.ocr_engine} onChange={e=>setSingleCheck({...singleCheck,ocr_engine:e.target.value})}>
+                      <option value="paddle">PaddleOCR</option>
+                      <option value="vietocr">Paddle detect + VietOCR</option>
+                    </select>
+                  </TrainField>
+                  <TrainField label="Model AI gợi ý nhãn" hint="Chỉ dùng khi bạn bấm chạy OCR + AI. Endpoint sẽ gọi model này để gán nhãn dựa trên OCR text và context layout.">
+                    <input className="input" value={singleCheck.llm_model} onChange={e=>setSingleCheck({...singleCheck,llm_model:e.target.value})} placeholder="gpt-4.1-mini" />
+                  </TrainField>
+                  <TrainField label="Thư mục lưu output preview" hint="Trang này sẽ tự lưu ra CSV preview tương thích train B, ảnh box OCR và file graph JSON vào thư mục này.">
+                    <input className="input" value={singleCheck.output_dir} onChange={e=>setSingleCheck({...singleCheck,output_dir:e.target.value})} placeholder="data/single_image_check" />
+                  </TrainField>
+                </div>
+                <div className="actions" style={{marginTop:12}}>
+                  <input type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp" onChange={e=>setSingleCheckUploadFile(e.target.files?.[0] || null)} />
+                  <button className="btn" onClick={uploadSingleCheckImage}>Upload ảnh test</button>
+                  <button className="btn dark" onClick={()=>runSinglePreview(false)}>Chỉ chạy OCR preview</button>
+                  <button className="btn primary" onClick={()=>runSinglePreview(true)}>Chạy OCR + AI gán nhãn</button>
+                </div>
+                <div className="tiny" style={{marginTop:6}}>
+                  {singleCheckUploadFile ? `Đã chọn file local: ${singleCheckUploadFile.name}` : "Bạn có thể upload một ảnh mới hoặc chọn ảnh đã có trong project."}
+                </div>
+              </div>
+            </div>
+
+            <div className="review-shell">
+              <div className="review-pane">
+                <div className="review-pane-head">
+                  <h4>Tóm tắt nhanh</h4>
+                </div>
+                <div className="review-pane-body">
+                  {!singleInspect ? (
+                    <div className="empty-state">Chưa có kết quả. Hãy chọn một ảnh rồi chạy OCR preview hoặc OCR + AI.</div>
+                  ) : (
+                    <>
+                      <div className="review-kpis" style={{gridTemplateColumns:"1fr"}}>
+                        <div className="review-kpi"><div className="k">Doc ID</div><div className="v" style={{fontSize:18}}>{singleInspect.doc_id}</div></div>
+                        <div className="review-kpi"><div className="k">Số node OCR</div><div className="v">{singleInspect.graph?.num_nodes || 0}</div></div>
+                        <div className="review-kpi"><div className="k">Số cạnh graph</div><div className="v">{singleInspect.graph?.num_edges || 0}</div></div>
+                        <div className="review-kpi"><div className="k">Node nghi ngờ cần rà</div><div className="v">{singleSuspiciousCount}</div></div>
+                      </div>
+                      <div className="node-detail" style={{marginTop:10}}>
+                        <div style={{fontWeight:800, marginBottom:8}}>File output tạo ra từ trang này</div>
+                        <div className="node-detail-grid">
+                          <div>CSV cho train B</div><div>{singleInspect.artifacts?.train_b_csv_path || "-"}</div>
+                          <div>Graph preview JSON</div><div>{singleInspect.artifacts?.graph_json_path || "-"}</div>
+                          <div>Ảnh OCR box</div><div>{singleInspect.ocr_boxes_image || "-"}</div>
+                          <div>Thư mục output</div><div>{singleInspect.artifacts?.output_dir || "-"}</div>
+                        </div>
+                      </div>
+                      <div className="step" style={{marginTop:10}}>
+                        <div className="step-head"><h3>Trường đã trích xuất / gán nhãn</h3><span className="badge idle">FIELDS</span></div>
+                        <div className="step-body">
+                          {singleExtractedRows.length===0 ? (
+                            <div className="empty-state">Chưa có trường nào được gán nhãn. Hãy chạy `OCR + AI gán nhãn` để xem dữ liệu train B thử nghiệm.</div>
+                          ) : (
+                            <div className="chipline">
+                              {singleLabelSummary.map(([label,count])=>(
+                                <span key={label} className="mini-chip">{labelText(label)}: {count}</span>
+                              ))}
+                            </div>
+                          )}
+                          <div className="table-wrap" style={{maxHeight:320, marginTop:10}}>
+                            <table className="tbl">
+                              <thead>
+                                <tr>
+                                  <th style={{width:180}}>Nhãn</th>
+                                  <th>Ví dụ text OCR được gán</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {singleExtractedRows.map(([label, values])=>(
+                                  <tr key={label}>
+                                    <td>{labelText(label)}</td>
+                                    <td>{values.slice(0,6).join(" | ")}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="step" style={{marginTop:10}}>
+                        <div className="step-head"><h3>Thống kê AI / heuristic</h3><span className="badge idle">AI</span></div>
+                        <div className="step-body">
+                          <div className="kv">
+                            <div>Chiến lược</div><div>{singleInspect.ai_stats?.strategy_used || "-"}</div>
+                            <div>Heuristic ăn chắc</div><div>{singleInspect.ai_stats?.heuristic_hits ?? 0}</div>
+                            <div>Node cần AI xử lý</div><div>{singleInspect.ai_stats?.llm_targets ?? 0}</div>
+                            <div>Số batch LLM</div><div>{singleInspect.ai_stats?.llm_batches ?? 0}</div>
+                          </div>
+                          {(singleInspect.ai_stats?.llm_errors || []).length > 0 ? (
+                            <div className="alert bad" style={{marginTop:10}}>
+                              <div className="alert-title">LLM có lỗi ở một vài batch</div>
+                              <div className="tiny">{(singleInspect.ai_stats?.llm_errors || []).join(" | ")}</div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="review-pane">
+                <div className="review-pane-head">
+                  <h4>Ảnh OCR và graph preview</h4>
+                  <div className="chipline">
+                    <button className={`tab-btn ${singleInspectTab==="ocr"?"active":""}`} onClick={()=>setSingleInspectTab("ocr")}>Xem box OCR</button>
+                    <button className={`tab-btn ${singleInspectTab==="ai"?"active":""}`} onClick={()=>setSingleInspectTab("ai")}>Xem nhãn AI</button>
+                    <button className={`tab-btn ${singleInspectTab==="graph"?"active":""}`} onClick={()=>setSingleInspectTab("graph")}>Xem graph train B</button>
+                  </div>
+                </div>
+                <div className="review-pane-body">
+                  {singleInspectLoading ? (
+                    <div className="empty-state">Đang chạy OCR / AI trên ảnh này...</div>
+                  ) : !singleInspect ? (
+                    <div className="empty-state">Chưa có dữ liệu preview 1 ảnh.</div>
+                  ) : singleInspectTab==="graph" ? (
+                    <>
+                      <div className="review-kpis">
+                        <div className="review-kpi"><div className="k">Số node</div><div className="v">{singleInspect.graph?.num_nodes || 0}</div></div>
+                        <div className="review-kpi"><div className="k">Số cạnh</div><div className="v">{singleInspect.graph?.num_edges || 0}</div></div>
+                        <div className="review-kpi"><div className="k">Số feature</div><div className="v">{(singleInspect.feature_names || []).length}</div></div>
+                      </div>
+                      <div className="node-detail" style={{marginTop:10}}>
+                        <div style={{fontWeight:800, marginBottom:6}}>Feature đầu vào train B</div>
+                        <div className="tiny">{(singleInspect.feature_names || []).join(", ") || "Không có feature"}</div>
+                      </div>
+                      <div className="term" style={{marginTop:10}}><h4>EDGE_INDEX</h4><pre>{JSON.stringify(singleInspect.graph?.edge_index || [[],[]], null, 2)}</pre></div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="review-image">
+                        {singleInspect.preview_path ? (
+                          <>
+                            <img
+                              src={`/api/files/image?path=${encodeURIComponent(singleInspect.preview_path)}`}
+                              alt={singleInspect.doc_id}
+                              onLoad={(e)=>setSingleNatural({w:e.target.naturalWidth||1,h:e.target.naturalHeight||1})}
+                            />
+                            <div className="review-overlay">
+                              {(singleInspect.nodes || []).map((node)=>(
+                                <div
+                                  key={`single-box-${node.node_index}`}
+                                  className={`ocr-box ${singleActiveNode===node.node_index?"active":""}`}
+                                  style={{
+                                    left:`${((node.bbox?.[0]||0)/singleNatural.w)*100}%`,
+                                    top:`${((node.bbox?.[1]||0)/singleNatural.h)*100}%`,
+                                    width:`${(((node.bbox?.[2]||0)-(node.bbox?.[0]||0))/singleNatural.w)*100}%`,
+                                    height:`${(((node.bbox?.[3]||0)-(node.bbox?.[1]||0))/singleNatural.h)*100}%`,
+                                    borderColor: singleActiveNode===node.node_index ? "#ef4444" : labelColor(String((singleInspectTab==="ocr" ? node.heuristic_label : (node.picked_label || node.label || node.suggested_label)) || "OTHER").trim() || "OTHER").border,
+                                    background: singleActiveNode===node.node_index ? "rgba(239,68,68,.12)" : labelColor(String((singleInspectTab==="ocr" ? node.heuristic_label : (node.picked_label || node.label || node.suggested_label)) || "OTHER").trim() || "OTHER").fill,
+                                  }}
+                                  title={`${node.node_index}: ${node.text}`}
+                                  onClick={()=>setSingleActiveNode(node.node_index)}
+                                />
+                              ))}
+                            </div>
+                          </>
+                        ) : <div className="empty-state">Không có ảnh preview.</div>}
+                      </div>
+                      <div className="tiny" style={{marginTop:8}}>
+                        {singleInspectTab==="ocr"
+                          ? "Màu box đang đi theo heuristic sơ bộ để bạn kiểm tra OCR và context ban đầu."
+                          : "Màu box đang đi theo nhãn cuối cùng sau khi chạy AI gợi ý nhãn."}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="review-pane">
+                <div className="review-pane-head">
+                  <h4>Node OCR, nhãn và context</h4>
+                </div>
+                <div className="review-pane-body">
+                  {!singleInspect ? (
+                    <div className="empty-state">Chưa có node OCR nào để xem.</div>
+                  ) : (
+                    <>
+                      {singleActiveNodeData ? (
+                        <div className="node-detail">
+                          <div style={{fontWeight:800, marginBottom:8}}>Node đang chọn: #{singleActiveNodeData.node_index}</div>
+                          <div className="node-detail-grid">
+                            <div>OCR text</div><div>{singleActiveNodeData.text}</div>
+                            <div>Dòng CSV preview</div><div>{singleActiveNodeData.row_number}</div>
+                            <div>Score OCR</div><div>{Number(singleActiveNodeData.score||0).toFixed(3)}</div>
+                            <div>Region dòng</div><div>{singleActiveNodeData.line_region || "-"}</div>
+                            <div>Gợi ý heuristic</div><div>{labelText(singleActiveNodeData.heuristic_label)}</div>
+                            <div>Nhãn AI / cuối</div><div>{labelText(singleActiveNodeData.picked_label || singleActiveNodeData.label || singleActiveNodeData.suggested_label)}</div>
+                            <div>Cột gợi ý</div><div>{singleActiveNodeData.column_hint || "-"}</div>
+                            <div>Lý do rà nhanh</div><div>{reviewIssueForNode(singleActiveNodeData) || "Không thấy dấu hiệu bất thường rõ ràng"}</div>
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="table-wrap" style={{maxHeight:820}}>
+                        <table className="tbl">
+                          <thead>
+                            <tr>
+                              <th style={{width:56}}>Node</th>
+                              <th style={{width:70}}>Dòng</th>
+                              <th>Nội dung OCR</th>
+                              <th style={{width:160}}>Heuristic</th>
+                              <th style={{width:170}}>AI / cuối</th>
+                              <th style={{width:80}}>Score</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(singleInspect.nodes || []).map((node)=>(
+                              <tr key={node.node_index} className={`node-row ${singleActiveNode===node.node_index?"active":""}`} onClick={()=>setSingleActiveNode(node.node_index)}>
+                                <td>{node.node_index}</td>
+                                <td>{node.row_number}</td>
+                                <td>{node.text}</td>
+                                <td>{labelText(node.heuristic_label)}</td>
+                                <td>{labelText(node.picked_label || node.label || node.suggested_label)}</td>
+                                <td>{Number(node.score || 0).toFixed(3)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="step">
+              <div className="step-head"><h3>Output API mới nhất</h3><span className="badge idle">READY</span></div>
+              <div className="step-body">
+                <div className="term"><h4>APPLICATION/JSON</h4><pre>{out||"Chưa có phản hồi API"}</pre></div>
+              </div>
+            </div>
+          </> : page==="train" ? <>
             <h2 className="title">Huấn luyện GCN</h2>
             <div className="subtitle">Màn này tập trung cho Stage B vì đây là bước bạn sẽ dùng nhiều nhất để huấn luyện mô hình hóa đơn. Mình để sẵn giải thích từng tham số để ngay cả khi chưa rành machine learning bạn vẫn có thể bắt đầu an toàn.</div>
 
@@ -1191,6 +1527,12 @@ function App(){
                       <TrainField label="Ngôn ngữ OCR" hint="Hiện tại nên để `vi` cho hóa đơn tiếng Việt.">
                         <input className="input" value={inferOne.lang} onChange={e=>setInferOne({...inferOne,lang:e.target.value})} placeholder="vi"/>
                       </TrainField>
+                      <TrainField label="Engine OCR" hint="`vietocr` dùng Paddle để bắt box rồi VietOCR để đọc chữ. Hữu ích khi bạn muốn so chất lượng text tiếng Việt với PaddleOCR thuần.">
+                        <select className="input" value={inferOne.ocr_engine} onChange={e=>setInferOne({...inferOne,ocr_engine:e.target.value})}>
+                          <option value="paddle">PaddleOCR</option>
+                          <option value="vietocr">Paddle detect + VietOCR</option>
+                        </select>
+                      </TrainField>
                       <TrainField label="Ảnh OCR debug output" hint="Ảnh này sẽ vẽ box OCR để bạn kiểm tra OCR có bắt đúng vùng chữ hay không.">
                         <input className="input" value={inferOne.ocr_debug_image} onChange={e=>setInferOne({...inferOne,ocr_debug_image:e.target.value})} placeholder="outputs/ocr_boxes_single.jpg"/>
                       </TrainField>
@@ -1439,7 +1781,18 @@ function App(){
             <div className="step">
               <div className="step-head"><h3>Bước 2: OCR batch và tạo nodes_to_label.csv</h3><span className={`badge ${statusClass(ocrJob?.status)}`}>{(ocrJob?.status||"idle").toUpperCase()}</span></div>
               <div className="step-body">
-                <div className="grid3"><input className="input" value={ocr.lang} onChange={e=>setOcr({...ocr,lang:e.target.value})}/><input className="input" value={ocr.input_dir} onChange={e=>setOcr({...ocr,input_dir:e.target.value})}/><input className="input" value={ocr.output_dir} onChange={e=>setOcr({...ocr,output_dir:e.target.value})}/></div>
+                <div className="grid3">
+                  <input className="input" value={ocr.lang} onChange={e=>setOcr({...ocr,lang:e.target.value})}/>
+                  <input className="input" value={ocr.input_dir} onChange={e=>setOcr({...ocr,input_dir:e.target.value})}/>
+                  <input className="input" value={ocr.output_dir} onChange={e=>setOcr({...ocr,output_dir:e.target.value})}/>
+                </div>
+                <div className="row" style={{gridTemplateColumns:"220px 1fr", marginTop:8}}>
+                  <select className="input" value={ocr.ocr_engine} onChange={e=>setOcr({...ocr,ocr_engine:e.target.value})}>
+                    <option value="paddle">PaddleOCR</option>
+                    <option value="vietocr">Paddle detect + VietOCR</option>
+                  </select>
+                  <div className="tiny">Nếu chọn `vietocr`, hệ thống sẽ giữ box của Paddle nhưng dùng VietOCR để đọc text trong từng box.</div>
+                </div>
                 <div style={{marginTop:8}} className="p">Tiến độ xử lý file: <b>{ocrCurrent}</b> / <b>{ocrTotal}</b> ({ocrPct}%)</div>
                 {ocrCurrentFile && <div className="tiny" style={{marginTop:4}}>Đang xử lý: <b>{ocrCurrentFile}</b></div>}
                 <div className="bar" style={{marginTop:6}}><div style={{width:`${ocrPct}%`}}/></div>

@@ -109,6 +109,7 @@ class OCRLabelingPrepService:
         input_dir: str,
         output_dir: str,
         lang: str = "en",
+        engine: str = "paddle",
         save_debug_images: bool = True,
         copy_images: bool = True,
         num_workers: int = 1,
@@ -209,7 +210,7 @@ class OCRLabelingPrepService:
             doc_id = image_path.stem
             logger.info("OCR [{}/{}]: {}", idx + 1, len(image_paths), image_path.name)
             try:
-                nodes = run_ocr(str(image_path), lang=lang)
+                nodes = run_ocr(str(image_path), lang=lang, engine=engine)
 
                 if copy_images:
                     target_img = images_out / image_path.name

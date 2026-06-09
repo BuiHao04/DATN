@@ -11,7 +11,7 @@ def cmd_gcn_infer(args: argparse.Namespace) -> None:
     gcn_service = GCNPipelineService()
     ocr_service = OCRService()
 
-    nodes = ocr_service.run(args.image, lang=args.lang)
+    nodes = ocr_service.run(args.image, lang=args.lang, engine=args.ocr_engine)
     ocr_service.save_debug_image(args.image, nodes, args.ocr_debug_image)
 
     result = gcn_service.infer(nodes, checkpoint_path=args.checkpoint)
@@ -30,7 +30,7 @@ def cmd_pretrained(args: argparse.Namespace) -> None:
     service = PretrainedInferenceService(model_id=model_id)
     ocr_service = OCRService()
 
-    nodes = ocr_service.run(args.image, lang=args.lang)
+    nodes = ocr_service.run(args.image, lang=args.lang, engine=args.ocr_engine)
     ocr_service.save_debug_image(args.image, nodes, args.ocr_debug_image)
 
     result = service.infer(args.image, nodes)
@@ -182,6 +182,7 @@ def cmd_prepare_ocr_labeling(args: argparse.Namespace) -> None:
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         lang=args.lang,
+        engine=args.ocr_engine,
         save_debug_images=bool(args.save_debug_images),
         copy_images=bool(args.copy_images),
         num_workers=args.num_workers,
@@ -275,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     gcn = sub.add_parser("gcn_infer")
     gcn.add_argument("--image", required=True)
     gcn.add_argument("--lang", default="vi")
+    gcn.add_argument("--ocr-engine", default="paddle")
     gcn.add_argument("--checkpoint", default=None, help="Trained GCN checkpoint (.pt). If omitted, use rule-based fallback.")
     gcn.add_argument("--ocr-debug-image", default="outputs/ocr_boxes.jpg")
     gcn.add_argument("--output-json", default="outputs/ocr_result.json")
@@ -284,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--project-dir", default=".")
     pre.add_argument("--image", required=True)
     pre.add_argument("--lang", default="vi")
+    pre.add_argument("--ocr-engine", default="paddle")
     pre.add_argument("--ocr-debug-image", default="outputs/ocr_boxes_pretrained.jpg")
     pre.add_argument("--output-json", default="outputs/pretrained_invoice_result.json")
     pre.set_defaults(func=cmd_pretrained)
@@ -387,6 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
     po.add_argument("--input-dir", required=True, help="Folder containing raw invoice images")
     po.add_argument("--output-dir", default="data/labeling_stage_b")
     po.add_argument("--lang", default="vi")
+    po.add_argument("--ocr-engine", default="paddle")
     po.add_argument("--save-debug-images", type=int, default=1)
     po.add_argument("--copy-images", type=int, default=1)
     po.add_argument("--num-workers", type=int, default=1, help="Total parallel workers")

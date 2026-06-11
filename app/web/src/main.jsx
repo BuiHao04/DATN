@@ -299,6 +299,21 @@ const STAGE_B_PRESETS = {
   ky_hon: {label:"Học kỹ hơn", epochs:35, lr:0.0002, early_stop_patience:6, desc:"Cho dataset lớn hơn hoặc khi bạn muốn model học chậm nhưng sâu hơn."},
 };
 
+const OCR_HELP = {
+  lang: "Ngôn ngữ OCR. Với hóa đơn tiếng Việt nên để `vi` để nhận dấu tốt hơn.",
+  input_dir: "Thư mục ảnh đầu vào mà bước 2 sẽ quét toàn bộ để OCR.",
+  output_dir: "Thư mục lưu kết quả OCR cho bước 3, gồm CSV, ảnh chuẩn hóa, JSON OCR và debug box.",
+  ocr_engine: "PaddleOCR là mặc định. VietOCR sẽ dùng Paddle để detect box rồi VietOCR đọc text bên trong box.",
+  det_db_box_thresh: "Ngưỡng giữ box detect. Tăng lên thì box chặt hơn nhưng có thể bỏ sót chữ nhỏ.",
+  det_db_unclip_ratio: "Mức nới box ra sau detect. Giảm xuống nếu box đang bị phình rộng quá.",
+  drop_score: "Ngưỡng bỏ text OCR yếu. Tăng lên nếu đang dính nhiều text rác.",
+  det_limit_side_len: "Kích thước cạnh lớn nhất trước khi detect. Tăng lên giúp bắt chữ nhỏ nhưng chậm hơn và tốn VRAM/RAM hơn.",
+  upscale_factor: "Phóng to ảnh trước khi OCR. Hữu ích với ảnh mờ, chữ nhỏ hoặc hóa đơn chụp xa.",
+  use_dilation: "Nối nét chữ trước detect. Chỉ nên bật khi chữ bị đứt hoặc box đang vỡ vụn.",
+  save_every_images: "Cứ mỗi N ảnh sẽ flush CSV/JSON xuống đĩa một lần để hạn chế mất tiến độ nếu dừng giữa chừng.",
+  overwrite_existing: "OCR lại toàn bộ từ đầu hoặc chỉ chạy tiếp phần ảnh chưa có kết quả.",
+};
+
 function shortName(s){s=String(s||""); return s.length>26?`${s.slice(0,24)}...`:s;}
 
 function TrainField({label, hint, children, help}){
@@ -374,14 +389,16 @@ function App(){
     lang:"vi",
     ocr_engine:"paddle",
     det_db_thresh:0.25,
-    det_db_box_thresh:0.58,
+    det_db_box_thresh:0.6,
     det_db_unclip_ratio:1.25,
     drop_score:0.45,
     use_dilation:0,
-    det_limit_side_len:1536,
+    det_limit_side_len:1600,
     upscale_factor:1.6,
     save_debug_images:1,
-    copy_images:1
+    copy_images:1,
+    save_every_images:10,
+    overwrite_existing:1
   });
   const [dataset,setDataset]=useState({input_csv:"data/labeling_stage_b/nodes_to_label.csv",output_json:"data/stage_b_vi_dataset.json"});
   const [labelRows,setLabelRows]=useState([]);
@@ -578,13 +595,21 @@ function App(){
       setSingleActiveNode(singleInspect.nodes[0].node_index);
     }
   },[singleInspect]);
-  const statusClass=(s)=>s==="success"?"success":s==="failed"?"failed":s==="running"?"running":s==="queued"?"queued":"idle";
+  const statusClass=(s)=>s==="success"?"success":s==="failed"?"failed":s==="running"?"running":s==="queued"?"queued":s==="stopping"?"queued":s==="stopped"?"idle":"idle";
   const lastLog=(j)=>{if(!j) return "Chưa có log"; const t=(j.stderr||j.stdout||"").trim(); if(!t) return "Job đã tạo, đang chờ log..."; return t.split(/\r?\n/).slice(-25).join("\n");};
 
   const apiPost=async(url,body)=>{const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const d=await r.json();setOut(JSON.stringify(d,null,2));await loadJobs();return d;};
   const upload=async()=>{if(!files.length) return; const fd=new FormData(); files.forEach(f=>fd.append("files",f)); if(subdir.trim()) fd.append("subdir",subdir.trim()); const r=await fetch("/api/files/upload-images",{method:"POST",body:fd}); const d=await r.json(); setOut(JSON.stringify(d,null,2)); await loadRecentRaw(); await loadJobs();};
   const clearOldFiles=async()=>{const d=await apiPost("/api/files/clear-stage-b-raw-images",{}); setFiles([]); setSubdir(""); setPickMode("files"); setPickerKey(v=>v+1); await loadRecentRaw(); return d;};
   const runOcrBatch=async()=>{await apiPost("/api/pipeline/prepare-ocr-labeling",ocr);};
+  const stopOcrBatch=async()=>{
+    if(!ocrJob?.id) return;
+    const r=await fetch(`/api/jobs/${ocrJob.id}/stop`,{method:"POST"});
+    const d=await r.json();
+    setOut(JSON.stringify(d,null,2));
+    await loadJobs();
+    setLabelHint("Đã gửi yêu cầu dừng bước 2. Hệ thống sẽ lưu các ảnh đã OCR xong để bạn sang bước 3 kiểm tra.");
+  };
   const loadLabelPreview=async(pageOverride=null, onlyMissingOverride=null)=>{
     try{
       const targetPage = pageOverride ?? Number(labelPage||1);
@@ -1936,37 +1961,84 @@ function App(){
               <div className="step-head"><h3>Bước 2: OCR batch và tạo nodes_to_label.csv</h3><span className={`badge ${statusClass(ocrJob?.status)}`}>{(ocrJob?.status||"idle").toUpperCase()}</span></div>
               <div className="step-body">
                 <div className="grid3">
-                  <input className="input" value={ocr.lang} onChange={e=>setOcr({...ocr,lang:e.target.value})}/>
-                  <input className="input" value={ocr.input_dir} onChange={e=>setOcr({...ocr,input_dir:e.target.value})}/>
-                  <input className="input" value={ocr.output_dir} onChange={e=>setOcr({...ocr,output_dir:e.target.value})}/>
+                  <TrainField label="Ngôn ngữ OCR" hint={OCR_HELP.lang} help="Với hóa đơn tiếng Việt, gần như luôn nên để `vi`.">
+                    <input className="input" value={ocr.lang} onChange={e=>setOcr({...ocr,lang:e.target.value})}/>
+                  </TrainField>
+                  <TrainField label="Thư mục ảnh đầu vào" hint={OCR_HELP.input_dir} help="Thường là `data/stage_b_raw_images`.">
+                    <input className="input" value={ocr.input_dir} onChange={e=>setOcr({...ocr,input_dir:e.target.value})}/>
+                  </TrainField>
+                  <TrainField label="Thư mục output OCR" hint={OCR_HELP.output_dir} help="Bước 3 sẽ đọc dữ liệu từ thư mục này để rà nhãn và compile dataset.">
+                    <input className="input" value={ocr.output_dir} onChange={e=>setOcr({...ocr,output_dir:e.target.value})}/>
+                  </TrainField>
                 </div>
                 <div className="row" style={{gridTemplateColumns:"220px 1fr", marginTop:8}}>
-                  <select className="input" value={ocr.ocr_engine} onChange={e=>setOcr({...ocr,ocr_engine:e.target.value})}>
-                    <option value="paddle">PaddleOCR</option>
-                    <option value="vietocr">Paddle detect + VietOCR</option>
-                  </select>
+                  <TrainField label="Engine OCR" hint={OCR_HELP.ocr_engine} help="Nếu bạn đang ưu tiên tốc độ thì thử PaddleOCR trước. Nếu ưu tiên text tiếng Việt có dấu, có thể so thêm với VietOCR.">
+                    <select className="input" value={ocr.ocr_engine} onChange={e=>setOcr({...ocr,ocr_engine:e.target.value})}>
+                      <option value="paddle">PaddleOCR</option>
+                      <option value="vietocr">Paddle detect + VietOCR</option>
+                    </select>
+                  </TrainField>
                   <div className="tiny">Nếu chọn `vietocr`, hệ thống sẽ giữ box của Paddle nhưng dùng VietOCR để đọc text trong từng box.</div>
                 </div>
                 <div className="grid3" style={{marginTop:8}}>
-                  <input className="input" type="number" step="0.01" value={ocr.det_db_box_thresh} onChange={e=>setOcr({...ocr,det_db_box_thresh:e.target.value})} placeholder="DB box thresh" />
-                  <input className="input" type="number" step="0.01" value={ocr.det_db_unclip_ratio} onChange={e=>setOcr({...ocr,det_db_unclip_ratio:e.target.value})} placeholder="Unclip ratio" />
-                  <input className="input" type="number" step="0.01" value={ocr.drop_score} onChange={e=>setOcr({...ocr,drop_score:e.target.value})} placeholder="Drop score" />
+                  <TrainField label="DB box thresh" hint={OCR_HELP.det_db_box_thresh} help="Gợi ý dễ bắt đầu: 0.55-0.60. Nếu box đang nuốt cả nền, tăng dần lên 0.62-0.68.">
+                    <input className="input" type="number" step="0.01" value={ocr.det_db_box_thresh} onChange={e=>setOcr({...ocr,det_db_box_thresh:e.target.value})} placeholder="0.58" />
+                  </TrainField>
+                  <TrainField label="Unclip ratio" hint={OCR_HELP.det_db_unclip_ratio} help="Gợi ý dễ bắt đầu: 1.15-1.25. Nếu box bị chật cắt chữ, tăng nhẹ; nếu box phình, giảm xuống.">
+                    <input className="input" type="number" step="0.01" value={ocr.det_db_unclip_ratio} onChange={e=>setOcr({...ocr,det_db_unclip_ratio:e.target.value})} placeholder="1.25" />
+                  </TrainField>
+                  <TrainField label="Drop score" hint={OCR_HELP.drop_score} help="Gợi ý dễ bắt đầu: 0.40-0.50. Tăng lên nếu đang nhận nhiều box rác ở nền.">
+                    <input className="input" type="number" step="0.01" value={ocr.drop_score} onChange={e=>setOcr({...ocr,drop_score:e.target.value})} placeholder="0.45" />
+                  </TrainField>
                 </div>
                 <div className="grid3" style={{marginTop:8}}>
-                  <input className="input" type="number" step="64" value={ocr.det_limit_side_len} onChange={e=>setOcr({...ocr,det_limit_side_len:e.target.value})} placeholder="Det limit side" />
-                  <input className="input" type="number" step="0.1" value={ocr.upscale_factor} onChange={e=>setOcr({...ocr,upscale_factor:e.target.value})} placeholder="Upscale factor" />
-                  <select className="input" value={ocr.use_dilation} onChange={e=>setOcr({...ocr,use_dilation:Number(e.target.value)})}>
-                    <option value={0}>Dilation: tắt</option>
-                    <option value={1}>Dilation: bật</option>
-                  </select>
+                  <TrainField label="Det limit side" hint={OCR_HELP.det_limit_side_len} help="Thường 1280-1792 là hợp lý. Ảnh càng to thì detect càng kỹ nhưng chậm hơn.">
+                    <input className="input" type="number" step="64" value={ocr.det_limit_side_len} onChange={e=>setOcr({...ocr,det_limit_side_len:e.target.value})} placeholder="1536" />
+                  </TrainField>
+                  <TrainField label="Upscale factor" hint={OCR_HELP.upscale_factor} help="Thường 1.4-1.8. Ảnh quá mờ hoặc chụp xa thì nên tăng, nhưng càng tăng càng tốn tài nguyên.">
+                    <input className="input" type="number" step="0.1" value={ocr.upscale_factor} onChange={e=>setOcr({...ocr,upscale_factor:e.target.value})} placeholder="1.6" />
+                  </TrainField>
+                  <TrainField label="Use dilation" hint={OCR_HELP.use_dilation} help="Để `tắt` nếu box đang tương đối ổn. Chỉ bật khi chữ bị đứt, mảnh hoặc detect bị vỡ nhiều mảnh nhỏ.">
+                    <select className="input" value={ocr.use_dilation} onChange={e=>setOcr({...ocr,use_dilation:Number(e.target.value)})}>
+                      <option value={0}>Dilation: tắt</option>
+                      <option value={1}>Dilation: bật</option>
+                    </select>
+                  </TrainField>
+                </div>
+                <div className="grid2" style={{marginTop:8}}>
+                  <TrainField label="Lưu mỗi N ảnh" hint={OCR_HELP.save_every_images} help="Nếu hay dừng giữa chừng để kiểm tra, nên để 5-10. Đây là mốc auto-lưu để bạn dừng xong vẫn có dữ liệu sang bước 3.">
+                    <input className="input" type="number" min="1" max="100" value={ocr.save_every_images} onChange={e=>setOcr({...ocr,save_every_images:Number(e.target.value||10)})} placeholder="10" />
+                  </TrainField>
+                  <TrainField label="Chế độ chạy lại" hint={OCR_HELP.overwrite_existing} help="`OCR lại từ đầu` dùng khi bạn vừa đổi tham số OCR. `Chạy tiếp phần còn lại` dùng khi lần trước dừng giữa chừng và muốn OCR tiếp.">
+                    <select className="input" value={ocr.overwrite_existing} onChange={e=>setOcr({...ocr,overwrite_existing:Number(e.target.value)})}>
+                      <option value={1}>OCR lại từ đầu</option>
+                      <option value={0}>Chạy tiếp phần còn lại</option>
+                    </select>
+                  </TrainField>
                 </div>
                 <div className="tiny" style={{marginTop:6}}>
                   Gợi ý hiện tại cho box chặt hơn: <b>box_thresh 0.58</b>, <b>unclip 1.25</b>, <b>drop_score 0.45</b>. Nếu box vẫn phình rộng, giảm unclip xuống 1.15-1.20.
                 </div>
+                <div className="tiny" style={{marginTop:4}}>
+                  Hệ thống hiện OCR tuần tự để ưu tiên ổn định. Nếu cần dừng giữa chừng để kiểm tra, hãy dùng nút <b>Dừng bước 2</b>, dữ liệu đã auto-lưu vẫn dùng được ở bước 3.
+                </div>
                 <div style={{marginTop:8}} className="p">Tiến độ xử lý file: <b>{ocrCurrent}</b> / <b>{ocrTotal}</b> ({ocrPct}%)</div>
                 {ocrCurrentFile && <div className="tiny" style={{marginTop:4}}>Đang xử lý: <b>{ocrCurrentFile}</b></div>}
                 <div className="bar" style={{marginTop:6}}><div style={{width:`${ocrPct}%`}}/></div>
-                <div className="row" style={{gridTemplateColumns:"1fr auto",marginTop:10}}><div className="tiny">POST /api/pipeline/prepare-ocr-labeling</div><button className="btn dark" onClick={runOcrBatch}>Chạy bước 2</button></div>
+                <div className="row" style={{gridTemplateColumns:"1fr auto auto",marginTop:10}}>
+                  <div className="tiny">POST /api/pipeline/prepare-ocr-labeling</div>
+                  <button className="btn dark" onClick={runOcrBatch}>Chạy bước 2</button>
+                  <button className="btn" onClick={stopOcrBatch} disabled={!ocrJob || !["queued","running","stopping"].includes(String(ocrJob.status||""))}>
+                    {ocrJob?.status==="stopping" ? "Đang dừng..." : "Dừng bước 2"}
+                  </button>
+                </div>
+                {(ocrJob?.status==="stopped" || ocrJob?.status==="stopping") && (
+                  <div className="tiny" style={{marginTop:6}}>
+                    {ocrJob?.status==="stopped"
+                      ? "Bước 2 đã dừng an toàn. Bạn có thể sang bước 3 để tải dữ liệu partial và kiểm tra ngay."
+                      : "Đã gửi yêu cầu dừng. Hệ thống sẽ hoàn tất ảnh đang OCR rồi lưu kết quả đã có."}
+                  </div>
+                )}
                 <div className="term" style={{marginTop:8}}><h4>LOG BƯỚC 2 (THỰC TẾ)</h4><pre>{lastLog(ocrJob)}</pre></div>
               </div>
             </div>

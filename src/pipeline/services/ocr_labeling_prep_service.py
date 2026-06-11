@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 from loguru import logger
 
-from pipeline.core.ocr_engine import prepare_ocr_image, run_ocr
+from pipeline.core.ocr_engine import get_last_ocr_runtime_info, prepare_ocr_image, run_ocr
 from pipeline.core.visualize import draw_boxes, draw_boxes_on_array
 
 
@@ -17,7 +17,18 @@ class OCRLabelingPrepService:
     """Prepare OCR outputs for manual labeling from a folder of invoice images."""
 
     SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
-    CSV_FIELDS = ["doc_id", "text", "label", "x1", "y1", "x2", "y2", "score"]
+    CSV_FIELDS = ["doc_id", "image_relpath", "text", "label", "x1", "y1", "x2", "y2", "score"]
+
+    def _build_doc_id(self, input_root: Path, image_path: Path) -> str:
+        try:
+            rel = image_path.relative_to(input_root)
+        except ValueError:
+            rel = image_path.name
+        if isinstance(rel, Path):
+            rel_no_suffix = rel.with_suffix("")
+            parts = [p.strip() for p in rel_no_suffix.parts if p.strip()]
+            return "__".join(parts)
+        return str(rel).replace("\\", "__").replace("/", "__").rsplit(".", 1)[0]
 
     def _write_text_lines(self, path: Path, lines: list[str]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +49,18 @@ class OCRLabelingPrepService:
             writer.writerows(rows)
             tmp_path = Path(f.name)
         tmp_path.replace(csv_path)
+
+    def _clear_directory(self, directory: Path) -> None:
+        if not directory.exists():
+            return
+        for path in sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if path.is_file():
+                path.unlink(missing_ok=True)
+            elif path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
 
     def _read_rows_csv(self, csv_path: Path) -> list[dict[str, str]]:
         if not csv_path.exists():
@@ -89,6 +112,7 @@ class OCRLabelingPrepService:
                 rows.append(
                     {
                         "doc_id": doc_id,
+                        "image_relpath": str(payload.get("image_relpath", "")),
                         "text": str(node.get("text", "")),
                         "label": "",
                         "x1": f"{float(bbox[0]):.2f}",
@@ -109,34 +133,30 @@ class OCRLabelingPrepService:
         self,
         input_dir: str,
         output_dir: str,
-        lang: str = "en",
+        lang: str = "vi",
         engine: str = "paddle",
         ocr_overrides: dict | None = None,
         save_debug_images: bool = True,
         copy_images: bool = True,
-        num_workers: int = 1,
-        worker_index: int = 0,
         save_every_images: int = 10,
+        overwrite_existing: bool = True,
+        stop_flag_file: str | None = None,
     ) -> dict[str, str]:
         in_dir = Path(input_dir)
         if not in_dir.exists():
             raise FileNotFoundError(f"Input dir not found: {input_dir}")
 
-        if num_workers < 1:
-            raise ValueError("num_workers must be >= 1")
-        if worker_index < 0 or worker_index >= num_workers:
-            raise ValueError("worker_index must be in [0, num_workers-1]")
         if save_every_images < 1:
             raise ValueError("save_every_images must be >= 1")
 
         out_dir = Path(output_dir)
-        if num_workers > 1:
-            out_dir = out_dir / f"worker_{worker_index}"
         images_out = out_dir / "images"
         ocr_json_out = out_dir / "ocr_json"
         debug_out = out_dir / "debug_boxes"
         failed_images_path = out_dir / "failed_images.txt"
+        empty_ocr_images_path = out_dir / "empty_ocr_images.txt"
         corrupted_ocr_json_path = out_dir / "corrupted_ocr_json.txt"
+        manifest_path = out_dir / "ocr_run_manifest.json"
 
         out_dir.mkdir(parents=True, exist_ok=True)
         images_out.mkdir(parents=True, exist_ok=True)
@@ -145,6 +165,47 @@ class OCRLabelingPrepService:
             debug_out.mkdir(parents=True, exist_ok=True)
 
         csv_path = out_dir / "nodes_to_label.csv"
+        if overwrite_existing:
+            logger.warning(
+                "Overwrite mode enabled. Clearing previous OCR labeling outputs in {} before rerun.",
+                out_dir,
+            )
+            if csv_path.exists():
+                csv_path.unlink()
+            self._clear_directory(ocr_json_out)
+            self._clear_directory(images_out)
+            self._clear_directory(debug_out)
+            if failed_images_path.exists():
+                failed_images_path.unlink()
+            if empty_ocr_images_path.exists():
+                empty_ocr_images_path.unlink()
+            if corrupted_ocr_json_path.exists():
+                corrupted_ocr_json_path.unlink()
+            if manifest_path.exists():
+                manifest_path.unlink()
+
+        manifest_payload = {
+            "input_dir": str(in_dir),
+            "output_dir": str(out_dir),
+            "lang": lang,
+            "ocr_engine": engine,
+            "ocr_config": ocr_overrides or {},
+            "save_debug_images": bool(save_debug_images),
+            "copy_images": bool(copy_images),
+            "save_every_images": int(save_every_images),
+            "overwrite_existing": bool(overwrite_existing),
+        }
+        manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(
+            "Batch OCR config | engine={} | lang={} | det_box_thresh={} | det_limit_side_len={} | upscale_factor={} | overwrite_existing={}",
+            engine,
+            lang,
+            (ocr_overrides or {}).get("det_db_box_thresh"),
+            (ocr_overrides or {}).get("det_limit_side_len"),
+            (ocr_overrides or {}).get("upscale_factor"),
+            overwrite_existing,
+        )
+
         existing_rows = self._read_rows_csv(csv_path)
         corrupted_ocr_json_files: list[str] = []
         if not existing_rows:
@@ -173,22 +234,19 @@ class OCRLabelingPrepService:
                     len(done_doc_ids),
                 )
         failed_images: list[str] = []
+        empty_ocr_images: list[str] = []
+        stop_flag_path = Path(stop_flag_file) if stop_flag_file else None
+        stopped_early = False
+        processed_count = 0
 
         image_paths = sorted(
             p for p in in_dir.rglob("*") if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTS
         )
         if not image_paths:
             raise ValueError(f"No supported image files in: {input_dir}")
-        if num_workers > 1:
-            image_paths = image_paths[worker_index::num_workers]
-            if not image_paths:
-                raise ValueError(
-                    f"Worker {worker_index}/{num_workers} got 0 images. "
-                    "Reduce num_workers or check input files."
-                )
         total_before_resume = len(image_paths)
         if done_doc_ids:
-            image_paths = [p for p in image_paths if p.stem not in done_doc_ids]
+            image_paths = [p for p in image_paths if self._build_doc_id(in_dir, p) not in done_doc_ids]
         skipped = total_before_resume - len(image_paths)
         logger.info(
             "Resume check: total={}, skipped_done={}, remaining={}",
@@ -206,17 +264,32 @@ class OCRLabelingPrepService:
                 "debug_boxes_dir": str(debug_out) if save_debug_images else "",
                 "skipped_done_images": str(skipped),
                 "processed_images": "0",
+                "failed_images_count": "0",
             }
 
         for idx, image_path in enumerate(image_paths):
-            doc_id = image_path.stem
+            if stop_flag_path and stop_flag_path.exists():
+                stopped_early = True
+                logger.warning(
+                    "Stop flag detected before image {}. Flushing current OCR outputs and stopping early.",
+                    image_path.name,
+                )
+                break
+
+            doc_id = self._build_doc_id(in_dir, image_path)
+            try:
+                image_relpath = str(image_path.relative_to(in_dir)).replace("\\", "/")
+            except ValueError:
+                image_relpath = image_path.name
             logger.info("OCR [{}/{}]: {}", idx + 1, len(image_paths), image_path.name)
             try:
                 processed_image = prepare_ocr_image(str(image_path), overrides=ocr_overrides)
                 nodes = run_ocr(str(image_path), lang=lang, engine=engine, overrides=ocr_overrides)
+                ocr_runtime = get_last_ocr_runtime_info()
 
                 if copy_images:
-                    target_img = images_out / image_path.name
+                    target_img = images_out / image_relpath
+                    target_img.parent.mkdir(parents=True, exist_ok=True)
                     if processed_image is not None:
                         cv2.imwrite(str(target_img), processed_image)
                     elif target_img.resolve() != image_path.resolve():
@@ -235,7 +308,12 @@ class OCRLabelingPrepService:
                 json_payload = {
                     "doc_id": doc_id,
                     "image_name": image_path.name,
+                    "image_relpath": image_relpath,
                     "image_path": str(target_img),
+                    "ocr_engine": engine,
+                    "ocr_runtime": ocr_runtime,
+                    "lang": lang,
+                    "ocr_config": ocr_overrides or {},
                     "num_nodes": len(nodes),
                     "nodes": [
                         {
@@ -249,10 +327,30 @@ class OCRLabelingPrepService:
                 }
                 json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+                if not nodes:
+                    empty_ocr_images.append(f"{image_relpath}\tempty_nodes")
+                    logger.warning("OCR returned 0 nodes for {}", image_relpath)
+                    processed_count += 1
+                    if (idx + 1) % save_every_images == 0:
+                        self._write_rows_csv(csv_path, rows)
+                        logger.info(
+                            "Saved batch CSV at {}/{} images (batch={}): {}",
+                            idx + 1,
+                            len(image_paths),
+                            save_every_images,
+                            csv_path,
+                        )
+                        if failed_images:
+                            self._write_text_lines(failed_images_path, failed_images)
+                        if empty_ocr_images:
+                            self._write_text_lines(empty_ocr_images_path, empty_ocr_images)
+                    continue
+
                 for n in nodes:
                     rows.append(
                         {
                             "doc_id": doc_id,
+                            "image_relpath": image_relpath,
                             "text": n.text,
                             "label": "",  # manual labeling target
                             "x1": f"{n.x1:.2f}",
@@ -267,6 +365,8 @@ class OCRLabelingPrepService:
                 logger.error("OCR failed for {}: {}", image_path, exc)
                 continue
 
+            processed_count += 1
+
             # Persist progress by image-batch.
             if (idx + 1) % save_every_images == 0:
                 self._write_rows_csv(csv_path, rows)
@@ -279,22 +379,32 @@ class OCRLabelingPrepService:
                 )
                 if failed_images:
                     self._write_text_lines(failed_images_path, failed_images)
+                if empty_ocr_images:
+                    self._write_text_lines(empty_ocr_images_path, empty_ocr_images)
 
         self._write_rows_csv(csv_path, rows)
         if failed_images:
             self._write_text_lines(failed_images_path, failed_images)
         elif failed_images_path.exists():
             failed_images_path.unlink()
+        if empty_ocr_images:
+            self._write_text_lines(empty_ocr_images_path, empty_ocr_images)
+        elif empty_ocr_images_path.exists():
+            empty_ocr_images_path.unlink()
 
         logger.info(
-            "Prepared labeling data at: {} (worker {}/{}, images={}, failed={})",
+            "Prepared labeling data at: {} (images={}, failed={}, empty={})",
             out_dir,
-            worker_index,
-            num_workers,
             len(image_paths),
             len(failed_images),
+            len(empty_ocr_images),
         )
         logger.info("CSV to label: {}", csv_path)
+        if stopped_early:
+            logger.warning(
+                "OCR labeling stopped early by user request. Partial results were saved to {}",
+                csv_path,
+            )
 
         return {
             "output_dir": str(out_dir),
@@ -303,7 +413,13 @@ class OCRLabelingPrepService:
             "ocr_json_dir": str(ocr_json_out),
             "debug_boxes_dir": str(debug_out) if save_debug_images else "",
             "skipped_done_images": str(skipped),
-            "processed_images": str(len(image_paths)),
+            "processed_images": str(processed_count),
             "failed_images_file": str(failed_images_path) if failed_images else "",
+            "failed_images_count": str(len(failed_images)),
+            "empty_ocr_images_file": str(empty_ocr_images_path) if empty_ocr_images else "",
+            "empty_ocr_images_count": str(len(empty_ocr_images)),
             "corrupted_ocr_json_file": str(corrupted_ocr_json_path) if corrupted_ocr_json_files else "",
+            "ocr_manifest_file": str(manifest_path),
+            "stopped_early": "1" if stopped_early else "0",
+            "saved_rows": str(len(rows)),
         }

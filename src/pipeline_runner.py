@@ -1,5 +1,11 @@
 ﻿from __future__ import annotations
 
+# IMPORTANT (Windows): import torch FIRST, before paddle/paddleocr is ever
+# imported. Paddle loads its own OpenMP runtime (libiomp5md.dll); if it loads
+# before torch, torch's shm.dll fails with `[WinError 127] The specified
+# procedure could not be found`. Loading torch first makes it resolve its DLLs
+# cleanly into the process, then paddle adapts.
+import torch  # noqa: F401
 import argparse
 from loguru import logger
 
@@ -194,9 +200,9 @@ def cmd_prepare_ocr_labeling(args: argparse.Namespace) -> None:
         },
         save_debug_images=bool(args.save_debug_images),
         copy_images=bool(args.copy_images),
-        num_workers=args.num_workers,
-        worker_index=args.worker_index,
         save_every_images=args.save_every_images,
+        overwrite_existing=bool(args.overwrite_existing),
+        stop_flag_file=args.stop_flag_file or None,
     )
     logger.info("OCR labeling prep done: {}", out)
 
@@ -401,17 +407,17 @@ def build_parser() -> argparse.ArgumentParser:
     po.add_argument("--lang", default="vi")
     po.add_argument("--ocr-engine", default="paddle")
     po.add_argument("--det-db-thresh", type=float, default=0.25)
-    po.add_argument("--det-db-box-thresh", type=float, default=0.58)
+    po.add_argument("--det-db-box-thresh", type=float, default=0.6)
     po.add_argument("--det-db-unclip-ratio", type=float, default=1.25)
     po.add_argument("--drop-score", type=float, default=0.45)
     po.add_argument("--use-dilation", type=int, default=0)
-    po.add_argument("--det-limit-side-len", type=int, default=1536)
+    po.add_argument("--det-limit-side-len", type=int, default=1600)
     po.add_argument("--upscale-factor", type=float, default=1.6)
     po.add_argument("--save-debug-images", type=int, default=1)
     po.add_argument("--copy-images", type=int, default=1)
-    po.add_argument("--num-workers", type=int, default=1, help="Total parallel workers")
-    po.add_argument("--worker-index", type=int, default=0, help="This worker index [0..num_workers-1]")
     po.add_argument("--save-every-images", type=int, default=10, help="Flush CSV every N images")
+    po.add_argument("--overwrite-existing", type=int, default=1, help="1=re-OCR all and overwrite old outputs")
+    po.add_argument("--stop-flag-file", default="", help="Internal stop signal file for graceful OCR stop")
     po.set_defaults(func=cmd_prepare_ocr_labeling)
 
     # Single command for full training flow (A -> B -> eval).

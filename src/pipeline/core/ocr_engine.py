@@ -13,6 +13,17 @@ from PIL import Image
 
 from pipeline.core.schema import OCRNode
 
+_LAST_OCR_RUNTIME_INFO: dict[str, object] = {}
+
+
+def _set_last_ocr_runtime_info(**kwargs) -> None:
+    global _LAST_OCR_RUNTIME_INFO
+    _LAST_OCR_RUNTIME_INFO = dict(kwargs)
+
+
+def get_last_ocr_runtime_info() -> dict[str, object]:
+    return dict(_LAST_OCR_RUNTIME_INFO)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name, "").strip().lower()
@@ -49,7 +60,7 @@ def _resolve_use_gpu() -> bool:
         return True
     if env_force in {"0", "false", "no"}:
         return False
-    return bool(paddle.is_compiled_with_cuda())
+    return False
 
 
 def _resolve_ocr_engine(engine: str | None = None) -> str:
@@ -450,7 +461,15 @@ def _run_paddle_ocr(image_input, lang: str, use_gpu: bool, scale_x: float, scale
 
 def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, scale_y: float) -> List[OCRNode]:
     detector = _get_paddle_ocr(lang or "vi", use_gpu, det_only=False, _config_signature=_ocr_config_signature())
-    predictor = _get_vietocr_predictor(use_gpu)
+    predictor = None
+    vietocr_available = True
+    vietocr_error = ""
+    try:
+        predictor = _get_vietocr_predictor(use_gpu)
+    except Exception as exc:
+        vietocr_available = False
+        vietocr_error = str(exc)
+        print(f"[OCR] VietOCR unavailable, fallback to Paddle text: {exc}")
     try:
         result = detector.ocr(image_input, cls=True)
     except TypeError:
@@ -461,6 +480,15 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
     else:
         image = image_input
     if image is None:
+        _set_last_ocr_runtime_info(
+            requested_engine="vietocr",
+            actual_engine="empty",
+            recognizer_backend="none",
+            vietocr_available=vietocr_available,
+            vietocr_error=vietocr_error,
+            used_gpu=use_gpu,
+            node_count=0,
+        )
         return []
 
     nodes: List[OCRNode] = []
@@ -468,13 +496,20 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
         if not line or len(line) < 2:
             continue
         box = line[0]
-        crop = _perspective_crop_from_box(image, box)
-        if crop is None:
-            continue
-        try:
-            text = str(predictor.predict(crop)).strip()
-        except Exception:
-            text = ""
+        paddle_text = str(line[1][0]).strip() if len(line) > 1 and line[1] else ""
+        paddle_score = float(line[1][1]) if len(line) > 1 and line[1] and len(line[1]) > 1 else 0.0
+        text = paddle_text
+        score = paddle_score
+        if vietocr_available and predictor is not None:
+            crop = _perspective_crop_from_box(image, box)
+            if crop is not None:
+                try:
+                    viet_text = str(predictor.predict(crop)).strip()
+                    if viet_text:
+                        text = viet_text
+                        score = 1.0
+                except Exception as exc:
+                    print(f"[OCR] VietOCR predict failed, fallback to Paddle text: {exc}")
         if not text:
             continue
         x1, y1, x2, y2 = _box_to_rect(box, scale_x, scale_y)
@@ -482,7 +517,7 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
         nodes.append(
             OCRNode(
                 text=text,
-                score=1.0,
+                score=score,
                 x1=x1,
                 y1=y1,
                 x2=x2,
@@ -494,6 +529,15 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
                 quad=quad,
             )
         )
+    _set_last_ocr_runtime_info(
+        requested_engine="vietocr",
+        actual_engine="vietocr" if vietocr_available and predictor is not None else "paddle_fallback",
+        recognizer_backend="vietocr" if vietocr_available and predictor is not None else "paddle",
+        vietocr_available=vietocr_available,
+        vietocr_error=vietocr_error,
+        used_gpu=use_gpu,
+        node_count=len(nodes),
+    )
     return _merge_nodes_same_line(nodes)
 
 
@@ -620,7 +664,17 @@ def run_ocr(image_path: str, lang: str = "vi", engine: str | None = None, overri
         selected_engine = _resolve_ocr_engine(engine)
         if selected_engine == "vietocr":
             return _run_vietocr_hybrid(image_input, lang, use_gpu, scale_x, scale_y)
-        return _run_paddle_ocr(image_input, lang, use_gpu, scale_x, scale_y)
+        nodes = _run_paddle_ocr(image_input, lang, use_gpu, scale_x, scale_y)
+        _set_last_ocr_runtime_info(
+            requested_engine="paddle",
+            actual_engine="paddle",
+            recognizer_backend="paddle",
+            vietocr_available=False,
+            vietocr_error="",
+            used_gpu=use_gpu,
+            node_count=len(nodes),
+        )
+        return nodes
 
 
 def prepare_ocr_image(image_path: str, overrides: dict | None = None) -> np.ndarray | None:

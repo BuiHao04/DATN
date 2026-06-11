@@ -11,6 +11,8 @@ import re
 import sys
 import random
 import unicodedata
+import time
+import tempfile
 from urllib import request as urllib_request
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +39,9 @@ STAGE_B_RAW_DIR = SRC_DIR / "data" / "stage_b_raw_images"
 ROOT_OUTPUTS_CHECKPOINTS_DIR = ROOT / "outputs" / "checkpoints"
 PYTHON_EXE = Path(sys.executable).resolve()
 CONDA_ENV_DIR = PYTHON_EXE.parent
+JOB_STOP_DIR = ROOT / "app" / "jobs" / "stop_flags"
+ACTIVE_JOB_PROCS: dict[str, subprocess.Popen] = {}
+JOBS_LOCK = threading.Lock()
 
 
 def _load_env_file() -> None:
@@ -56,6 +61,7 @@ def _load_env_file() -> None:
 
 
 _load_env_file()
+JOB_STOP_DIR.mkdir(parents=True, exist_ok=True)
 
 INVOICE_LABELS = [
     "MERCHANT_NAME",
@@ -236,17 +242,346 @@ class SingleImagePreviewRequest(BaseModel):
 class PrepareOcrLabelingRequest(BaseModel):
     input_dir: str
     output_dir: str = "data/labeling_stage_b"
-    lang: str = "en"
+    lang: str = "vi"
     ocr_engine: str = "paddle"
     det_db_thresh: float = 0.25
-    det_db_box_thresh: float = 0.58
+    det_db_box_thresh: float = 0.6
     det_db_unclip_ratio: float = 1.25
     drop_score: float = 0.45
     use_dilation: int = 0
-    det_limit_side_len: int = 1536
+    det_limit_side_len: int = 1600
     upscale_factor: float = 1.6
     save_debug_images: int = 1
     copy_images: int = 1
+    save_every_images: int = 10
+    overwrite_existing: int = 1
+
+
+def _job_stop_flag_path(job_id: str) -> Path:
+    return JOB_STOP_DIR / f"{job_id}.stop"
+
+
+def _request_job_stop(job_id: str) -> dict[str, Any]:
+    jobs = _load_jobs()
+    target = None
+    for j in jobs:
+        if j["id"] == job_id:
+            target = j
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if target.get("status") in {"success", "failed", "stopped"}:
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "status": target.get("status"),
+            "message": "Job đã kết thúc trước đó.",
+        }
+
+    stop_flag = _job_stop_flag_path(job_id)
+    stop_flag.write_text(str(time.time()), encoding="utf-8")
+    target["stop_requested"] = True
+    target["stop_requested_at"] = datetime.utcnow().isoformat()
+    if target.get("status") in {"queued", "running"}:
+        target["status"] = "stopping"
+    _save_jobs(jobs)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": target.get("status"),
+        "message": "Đã gửi yêu cầu dừng. Job sẽ lưu dữ liệu OCR đã xong rồi dừng an toàn.",
+    }
+
+
+def _iter_image_files(input_dir: Path) -> list[Path]:
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+    return sorted(p for p in input_dir.rglob("*") if p.is_file() and p.suffix.lower() in exts)
+
+
+def _merge_worker_ocr_outputs(output_dir: Path, worker_count: int, save_debug_images: bool) -> dict[str, Any]:
+    root_images = output_dir / "images"
+    root_ocr_json = output_dir / "ocr_json"
+    root_debug = output_dir / "debug_boxes"
+    root_csv = output_dir / "nodes_to_label.csv"
+    root_failed = output_dir / "failed_images.txt"
+    root_empty = output_dir / "empty_ocr_images.txt"
+    root_corrupted = output_dir / "corrupted_ocr_json.txt"
+
+    for p in [root_images, root_ocr_json, root_debug]:
+        p.mkdir(parents=True, exist_ok=True)
+        for old in p.rglob("*"):
+            if old.is_file():
+                old.unlink()
+
+    if root_csv.exists():
+        root_csv.unlink()
+    if root_failed.exists():
+        root_failed.unlink()
+    if root_empty.exists():
+        root_empty.unlink()
+    if root_corrupted.exists():
+        root_corrupted.unlink()
+
+    merged_rows: list[dict[str, Any]] = []
+    fields: list[str] | None = None
+    failed_lines: list[str] = []
+    empty_lines: list[str] = []
+    corrupted_lines: list[str] = []
+    merged_docs = 0
+
+    for worker_index in range(worker_count):
+        worker_dir = output_dir / f"worker_{worker_index}"
+        if not worker_dir.exists():
+            continue
+
+        worker_csv = worker_dir / "nodes_to_label.csv"
+        if worker_csv.exists():
+            with worker_csv.open("r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                if reader.fieldnames and fields is None:
+                    fields = list(reader.fieldnames)
+                for row in reader:
+                    merged_rows.append(row)
+
+        for src_dir, dst_dir in [
+            (worker_dir / "images", root_images),
+            (worker_dir / "ocr_json", root_ocr_json),
+            (worker_dir / "debug_boxes", root_debug),
+        ]:
+            if src_dir.exists():
+                for src in src_dir.rglob("*"):
+                    if src.is_file():
+                        if src_dir.name == "images":
+                            rel = src.relative_to(src_dir)
+                            target = dst_dir / rel
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                        else:
+                            target = dst_dir / src.name
+                        shutil.copy2(src, target)
+                        if src_dir.name == "ocr_json":
+                            merged_docs += 1
+
+        worker_failed = worker_dir / "failed_images.txt"
+        if worker_failed.exists():
+            failed_lines.extend([x for x in worker_failed.read_text(encoding="utf-8").splitlines() if x.strip()])
+
+        worker_empty = worker_dir / "empty_ocr_images.txt"
+        if worker_empty.exists():
+            empty_lines.extend([x for x in worker_empty.read_text(encoding="utf-8").splitlines() if x.strip()])
+
+        worker_corrupted = worker_dir / "corrupted_ocr_json.txt"
+        if worker_corrupted.exists():
+            corrupted_lines.extend([x for x in worker_corrupted.read_text(encoding="utf-8").splitlines() if x.strip()])
+
+    if fields is None:
+        fields = ["doc_id", "text", "label", "x1", "y1", "x2", "y2", "score"]
+    _write_csv_rows(root_csv, fields, merged_rows)
+    if failed_lines:
+        root_failed.write_text("\n".join(failed_lines) + "\n", encoding="utf-8")
+    if empty_lines:
+        root_empty.write_text("\n".join(empty_lines) + "\n", encoding="utf-8")
+    if corrupted_lines:
+        root_corrupted.write_text("\n".join(corrupted_lines) + "\n", encoding="utf-8")
+
+    if not save_debug_images and root_debug.exists():
+        for p in root_debug.glob("*"):
+            if p.is_file():
+                p.unlink()
+
+    return {
+        "nodes_csv": str(root_csv),
+        "images_dir": str(root_images),
+        "ocr_json_dir": str(root_ocr_json),
+        "debug_boxes_dir": str(root_debug) if save_debug_images else "",
+        "merged_rows": len(merged_rows),
+        "merged_docs": merged_docs,
+        "failed_images_count": len(failed_lines),
+        "empty_ocr_images_count": len(empty_lines),
+        "corrupted_ocr_json_count": len(corrupted_lines),
+    }
+
+
+def _run_prepare_ocr_parallel_job(job_id: str, args: dict[str, Any]) -> None:
+    jobs = _load_jobs()
+    for j in jobs:
+        if j["id"] == job_id:
+            j["status"] = "running"
+            j["started_at"] = datetime.utcnow().isoformat()
+            j["stdout"] = "Khởi động OCR song song nhiều worker..."
+    _save_jobs(jobs)
+
+    input_dir = _resolve_project_path(args["input_dir"])
+    output_dir = _resolve_project_path(args.get("output_dir", "data/labeling_stage_b"))
+    worker_count = max(1, min(int(args.get("num_workers", 1)), 12))
+    save_debug_images = int(args.get("save_debug_images", 1)) == 1
+    save_every_images = max(1, int(args.get("save_every_images", 10)))
+    overwrite_existing = int(args.get("overwrite_existing", 1)) == 1
+    parent_stop_flag = _job_stop_flag_path(job_id)
+    ocr_use_gpu_raw = str(os.getenv("OCR_USE_GPU", "")).strip().lower()
+    ocr_use_gpu = ocr_use_gpu_raw in {"1", "true", "yes", "on"}
+
+    image_files = _iter_image_files(input_dir)
+    total_images = len(image_files)
+    if total_images == 0:
+        jobs = _load_jobs()
+        for j in jobs:
+            if j["id"] == job_id:
+                j["status"] = "failed"
+                j["stdout"] = "Không tìm thấy ảnh đầu vào để OCR."
+                j["finished_at"] = datetime.utcnow().isoformat()
+        _save_jobs(jobs)
+        return
+
+    if worker_count > total_images:
+        worker_count = total_images
+
+    forced_single_worker_reason = None
+    if ocr_use_gpu and worker_count > 1:
+        forced_single_worker_reason = (
+            "Phát hiện OCR_USE_GPU=1. PaddleOCR GPU nhiều process trên Windows dễ trả empty boxes/0 node, "
+            "nên hệ thống tự ép về 1 worker để tránh OCR rỗng."
+        )
+        worker_count = 1
+
+    worker_states: dict[int, dict[str, Any]] = {
+        i: {"current": 0, "total": 0, "current_file": "", "log_lines": [], "return_code": None}
+        for i in range(worker_count)
+    }
+    procs: list[tuple[int, subprocess.Popen, Path]] = []
+    threads: list[threading.Thread] = []
+
+    def stream_worker_stdout(worker_index: int, proc: subprocess.Popen) -> None:
+        if proc.stdout is None:
+            return
+        for line in proc.stdout:
+            line_text = line.rstrip("\n")
+            state = worker_states[worker_index]
+            state["log_lines"].append(line_text)
+            if len(state["log_lines"]) > 120:
+                state["log_lines"] = state["log_lines"][-120:]
+            m = re.search(r"OCR\s+\[(\d+)/(\d+)\]:\s*(.+)$", line_text)
+            if m:
+                state["current"] = int(m.group(1))
+                state["total"] = int(m.group(2))
+                state["current_file"] = m.group(3).strip()
+
+    try:
+        for worker_index in range(worker_count):
+            child_stop_flag = _job_stop_flag_path(f"{job_id}_worker_{worker_index}")
+            child_args = dict(args)
+            child_args["num_workers"] = worker_count
+            child_args["worker_index"] = worker_index
+            child_args["save_every_images"] = save_every_images
+            child_args["overwrite_existing"] = 1 if overwrite_existing else 0
+            child_args["stop_flag_file"] = str(child_stop_flag)
+            cmd = _build_cmd("prepare_ocr_labeling", child_args)
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(SRC_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=_build_subprocess_env(),
+            )
+            procs.append((worker_index, proc, child_stop_flag))
+            t = threading.Thread(target=stream_worker_stdout, args=(worker_index, proc), daemon=True)
+            t.start()
+            threads.append(t)
+
+        while True:
+            alive = False
+            if parent_stop_flag.exists():
+                for _, _, child_stop_flag in procs:
+                    if not child_stop_flag.exists():
+                        child_stop_flag.write_text(str(time.time()), encoding="utf-8")
+
+            current = 0
+            total = 0
+            active_files: list[str] = []
+            logs: list[str] = [f"OCR song song {worker_count} worker | tổng ảnh đầu vào: {total_images}"]
+            for worker_index, proc, _ in procs:
+                if proc.poll() is None:
+                    alive = True
+                state = worker_states[worker_index]
+                current += int(state.get("current") or 0)
+                total += int(state.get("total") or 0)
+                if state.get("current_file"):
+                    active_files.append(f"W{worker_index}: {state['current_file']}")
+                worker_status = "running" if proc.poll() is None else f"done(rc={proc.poll()})"
+                logs.append(
+                    f"W{worker_index}: {state.get('current', 0)}/{state.get('total', 0)} | {worker_status}"
+                )
+                logs.extend(state.get("log_lines", [])[-2:])
+
+            pct_base = total if total > 0 else total_images
+            pct = int((current * 100) / pct_base) if pct_base > 0 else 0
+            jobs = _load_jobs()
+            for j in jobs:
+                if j["id"] == job_id:
+                    if parent_stop_flag.exists() and j.get("status") in {"queued", "running"}:
+                        j["status"] = "stopping"
+                    j["progress"] = {
+                        "current": current,
+                        "total": pct_base,
+                        "percent": min(100, pct),
+                        "current_file": " | ".join(active_files[:3]),
+                        "worker_count": worker_count,
+                    }
+                    j["stdout"] = "\n".join(logs[-250:])
+            _save_jobs(jobs)
+
+            if not alive:
+                break
+            time.sleep(1.5)
+
+        for _, proc, _ in procs:
+            proc.wait()
+        for t in threads:
+            t.join(timeout=1)
+
+        merge_info = _merge_worker_ocr_outputs(output_dir, worker_count, save_debug_images)
+        any_failed = False
+        for worker_index, proc, _ in procs:
+            rc = proc.returncode or 0
+            worker_states[worker_index]["return_code"] = rc
+            if rc != 0:
+                any_failed = True
+
+        jobs = _load_jobs()
+        for j in jobs:
+            if j["id"] == job_id:
+                stopped = parent_stop_flag.exists() or bool(j.get("stop_requested"))
+                if stopped and not any_failed:
+                    j["status"] = "stopped"
+                else:
+                    j["status"] = "success" if not any_failed else "failed"
+                j["progress"] = {
+                    "current": merge_info["merged_docs"],
+                    "total": total_images,
+                    "percent": int((merge_info["merged_docs"] * 100) / total_images) if total_images else 100,
+                    "current_file": "",
+                    "worker_count": worker_count,
+                }
+                summary = [
+                    f"OCR nhiều worker hoàn tất | workers={worker_count}",
+                    f"merged_docs={merge_info['merged_docs']}/{total_images}",
+                    f"merged_rows={merge_info['merged_rows']}",
+                    f"failed_images={merge_info['failed_images_count']}",
+                    f"empty_ocr_images={merge_info['empty_ocr_images_count']}",
+                    f"nodes_csv={merge_info['nodes_csv']}",
+                ]
+                j["stdout"] = "\n".join(summary)
+                j["return_code"] = 0 if not any_failed else 1
+                j["finished_at"] = datetime.utcnow().isoformat()
+        _save_jobs(jobs)
+    finally:
+        if parent_stop_flag.exists():
+            parent_stop_flag.unlink()
+        for _, _, child_stop_flag in procs:
+            if child_stop_flag.exists():
+                child_stop_flag.unlink()
 
 
 class TrainGcnStageARequest(BaseModel):
@@ -341,14 +676,40 @@ ALLOWED_MODES = {
 
 
 def _load_jobs() -> list[dict[str, Any]]:
-    if not JOBS_FILE.exists():
-        return []
-    return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
+    with JOBS_LOCK:
+        if not JOBS_FILE.exists():
+            return []
+        try:
+            raw = JOBS_FILE.read_text(encoding="utf-8").strip()
+        except Exception:
+            return []
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except Exception:
+            broken = JOBS_FILE.with_suffix(".broken.json")
+            try:
+                shutil.copy2(JOBS_FILE, broken)
+            except Exception:
+                pass
+            return []
 
 
 def _save_jobs(jobs: list[dict[str, Any]]) -> None:
-    JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    JOBS_FILE.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
+    with JOBS_LOCK:
+        JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(JOBS_FILE.parent),
+            delete=False,
+            suffix=".tmp",
+        ) as f:
+            f.write(json.dumps(jobs, ensure_ascii=False, indent=2))
+            tmp_path = Path(f.name)
+        tmp_path.replace(JOBS_FILE)
 
 
 def _write_csv_rows(csv_path: Path, fields: list[str], rows: list[dict[str, Any]]) -> None:
@@ -388,26 +749,34 @@ def _resolve_project_path(path_str: str) -> Path:
 
 
 def _build_subprocess_env() -> dict[str, str]:
+    # Inherit the parent process environment verbatim. The in-process OCR flow
+    # (single-image preview) already imports torch/VietOCR successfully using
+    # this exact environment, so the subprocess must not diverge from it.
     env = os.environ.copy()
-    path_parts: list[str] = []
 
+    # Keep the inherited PATH order first (conda-activated order that torch's
+    # DLL loader relies on). Only APPEND conda DLL dirs that are missing, so we
+    # never shadow torch's MKL/OpenMP dependencies with a different Library/bin
+    # copy (the cause of `WinError 127` / `shm.dll` on Windows).
+    existing_path = env.get("PATH", "")
+    existing_parts = existing_path.split(os.pathsep) if existing_path else []
+    existing_lower = {p.lower() for p in existing_parts}
     for candidate in (
         CONDA_ENV_DIR / "Library" / "bin",
         CONDA_ENV_DIR / "DLLs",
         CONDA_ENV_DIR / "Scripts",
         CONDA_ENV_DIR,
     ):
-        if candidate.exists():
-            path_parts.append(str(candidate))
+        if candidate.exists() and str(candidate).lower() not in existing_lower:
+            existing_parts.append(str(candidate))
+    env["PATH"] = os.pathsep.join(p for p in existing_parts if p)
 
-    existing_path = env.get("PATH", "")
-    if existing_path:
-        path_parts.append(existing_path)
-    env["PATH"] = os.pathsep.join(path_parts)
-    env["PYTHONHOME"] = ""
+    # Remove PYTHONHOME entirely instead of blanking it. An empty string breaks
+    # Python/torch DLL initialization on Windows; absence lets the interpreter
+    # resolve its own home correctly.
+    env.pop("PYTHONHOME", None)
     env["PYTHONPATH"] = str(SRC_DIR)
     return env
-
 
 def _project_relative_path(path: Path) -> str:
     resolved = path.resolve()
@@ -430,6 +799,17 @@ def _image_files_under(directory: Path) -> list[Path]:
     ]
 
 
+def _doc_id_from_image_path(path: Path, base_dir: Path) -> str:
+    try:
+        rel = path.relative_to(base_dir)
+    except ValueError:
+        rel = path.name
+    if isinstance(rel, Path):
+        rel_no_suffix = rel.with_suffix("")
+        return "__".join(part.strip() for part in rel_no_suffix.parts if part.strip())
+    return str(rel).replace("\\", "__").replace("/", "__").rsplit(".", 1)[0]
+
+
 def _stage_b_image_index(base_dir: Path | None = None) -> list[Path]:
     STAGE_B_RAW_DIR.mkdir(parents=True, exist_ok=True)
     indexed: list[Path] = []
@@ -449,10 +829,24 @@ def _stage_b_image_index(base_dir: Path | None = None) -> list[Path]:
 
 def _find_image_for_doc(doc_id: str, image_index: list[Path]) -> str | None:
     did = doc_id.strip().lower()
-    exact = next((p for p in image_index if p.stem.lower() == did), None)
+    def _candidate_doc_ids(path: Path) -> list[str]:
+        values = [path.stem.lower()]
+        try:
+            if STAGE_B_RAW_DIR.resolve() in path.resolve().parents:
+                values.append(_doc_id_from_image_path(path, STAGE_B_RAW_DIR).lower())
+        except Exception:
+            pass
+        try:
+            if path.parent.name == "images":
+                values.append(_doc_id_from_image_path(path, path.parent).lower())
+        except Exception:
+            pass
+        return values
+
+    exact = next((p for p in image_index if did in _candidate_doc_ids(p)), None)
     if exact:
         return str(exact.relative_to(SRC_DIR))
-    fuzzy = next((p for p in image_index if did in p.stem.lower()), None)
+    fuzzy = next((p for p in image_index if any(did in val for val in _candidate_doc_ids(p))), None)
     if fuzzy:
         return str(fuzzy.relative_to(SRC_DIR))
     return None
@@ -507,46 +901,59 @@ def _run_job(job_id: str, cmd: list[str]) -> None:
         bufsize=1,
         env=_build_subprocess_env(),
     )
+    ACTIVE_JOB_PROCS[job_id] = proc
+    stop_flag_path = _job_stop_flag_path(job_id)
 
     log_lines: list[str] = []
-    if proc.stdout is not None:
-        for line in proc.stdout:
-            log_lines.append(line.rstrip("\n"))
-            if len(log_lines) > 2000:
-                log_lines = log_lines[-2000:]
-            line_text = line.rstrip("\n")
-            m = re.search(r"OCR\s+\[(\d+)/(\d+)\]:\s*(.+)$", line_text)
-            jobs = _load_jobs()
-            for j in jobs:
-                if j["id"] == job_id:
-                    j["stdout"] = "\n".join(log_lines[-400:])
-                    if m:
-                        cur = int(m.group(1))
-                        total = int(m.group(2))
-                        name = m.group(3).strip()
-                        pct = int((cur * 100) / total) if total > 0 else 0
-                        j["progress"] = {
-                            "current": cur,
-                            "total": total,
-                            "percent": pct,
-                            "current_file": name,
-                        }
-            _save_jobs(jobs)
+    try:
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                log_lines.append(line.rstrip("\n"))
+                if len(log_lines) > 2000:
+                    log_lines = log_lines[-2000:]
+                line_text = line.rstrip("\n")
+                m = re.search(r"OCR\s+\[(\d+)/(\d+)\]:\s*(.+)$", line_text)
+                jobs = _load_jobs()
+                for j in jobs:
+                    if j["id"] == job_id:
+                        j["stdout"] = "\n".join(log_lines[-400:])
+                        if stop_flag_path.exists() and j.get("status") in {"queued", "running"}:
+                            j["status"] = "stopping"
+                        if m:
+                            cur = int(m.group(1))
+                            total = int(m.group(2))
+                            name = m.group(3).strip()
+                            pct = int((cur * 100) / total) if total > 0 else 0
+                            j["progress"] = {
+                                "current": cur,
+                                "total": total,
+                                "percent": pct,
+                                "current_file": name,
+                            }
+                _save_jobs(jobs)
 
-    proc.wait()
+        proc.wait()
 
-    jobs = _load_jobs()
-    for j in jobs:
-        if j["id"] == job_id:
-            j["status"] = "success" if (proc.returncode or 0) == 0 else "failed"
-            j["return_code"] = proc.returncode
-            j["stdout"] = "\n".join(log_lines[-1000:])
-            j["stderr"] = ""
-            if j["status"] == "success" and j.get("progress", {}).get("total", 0) > 0:
-                j["progress"]["current"] = j["progress"]["total"]
-                j["progress"]["percent"] = 100
-            j["finished_at"] = datetime.utcnow().isoformat()
-    _save_jobs(jobs)
+        jobs = _load_jobs()
+        for j in jobs:
+            if j["id"] == job_id:
+                stopped = stop_flag_path.exists() or bool(j.get("stop_requested"))
+                if stopped and (proc.returncode or 0) == 0:
+                    j["status"] = "stopped"
+                else:
+                    j["status"] = "success" if (proc.returncode or 0) == 0 else "failed"
+                j["return_code"] = proc.returncode
+                j["stdout"] = "\n".join(log_lines[-1000:])
+                j["stderr"] = ""
+                if j["status"] == "success" and j.get("progress", {}).get("total", 0) > 0:
+                    j["progress"]["current"] = j["progress"]["total"]
+                    j["progress"]["percent"] = 100
+                j["finished_at"] = datetime.utcnow().isoformat()
+        _save_jobs(jobs)
+    finally:
+        ACTIVE_JOB_PROCS.pop(job_id, None)
+        if stop_flag_path.exists():
+            stop_flag_path.unlink()
 
 
 def _enqueue_job(mode: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -554,6 +961,9 @@ def _enqueue_job(mode: str, args: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
 
     job_id = str(uuid.uuid4())
+    args = dict(args)
+    if mode == "prepare_ocr_labeling":
+        args["stop_flag_file"] = str(_job_stop_flag_path(job_id))
     cmd = _build_cmd(mode, args)
     job = {
         "id": job_id,
@@ -645,6 +1055,11 @@ def get_job(job_id: str) -> dict[str, Any]:
 @app.post("/api/jobs")
 def create_job(req: JobRequest) -> dict[str, Any]:
     return _enqueue_job(mode=req.mode, args=req.args)
+
+
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str) -> dict[str, Any]:
+    return _request_job_stop(job_id)
 
 
 @app.post("/api/pipeline/gcn-infer")
@@ -2111,6 +2526,7 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
 
 @app.post("/api/pipeline/single-image-preview")
 def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
+    from pipeline.core.ocr_engine import get_last_ocr_runtime_info
     from pipeline.services.ocr_service import OCRService
 
     image_path = _resolve_project_path(req.image)
@@ -2137,6 +2553,7 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
         engine=req.ocr_engine or "paddle",
         overrides=ocr_overrides,
     )
+    ocr_runtime = get_last_ocr_runtime_info()
 
     doc_id = image_path.stem
     rows: list[dict[str, Any]] = []
@@ -2286,6 +2703,7 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
         "normalized_image_path": preview_image_rel,
         "ocr_boxes_image": debug_image_rel,
         "ocr_config": ocr_overrides,
+        "ocr_runtime": ocr_runtime,
         "artifacts": {
             "train_b_csv_path": _project_relative_path(csv_preview_path),
             "graph_json_path": _project_relative_path(graph_preview_path),

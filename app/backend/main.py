@@ -193,6 +193,7 @@ class LabelingSampleRequest(BaseModel):
     text_col: str = "text"
     limit: int = 100
     page: int = 1
+    only_empty: int = 0
 
 
 class LabelingByDocRequest(BaseModel):
@@ -2329,9 +2330,11 @@ def labeling_sample(req: LabelingSampleRequest) -> dict[str, Any]:
 
         rows = []
         total_rows = 0
+        filtered_total = 0
         empty_count = 0
         limit = max(1, min(req.limit, 500))
         page = max(1, req.page)
+        only_empty = bool(req.only_empty)
         start_idx = (page - 1) * limit
         end_idx = start_idx + limit
         for row_number, row in enumerate(reader, start=2):
@@ -2339,7 +2342,10 @@ def labeling_sample(req: LabelingSampleRequest) -> dict[str, Any]:
             cur_label = str(row.get(req.label_col, "") or "").strip()
             if not cur_label:
                 empty_count += 1
-            row_pos = total_rows - 1
+            if only_empty and cur_label:
+                continue
+            filtered_total += 1
+            row_pos = filtered_total - 1
             if start_idx <= row_pos < end_idx:
                 rows.append(
                     {
@@ -2353,10 +2359,12 @@ def labeling_sample(req: LabelingSampleRequest) -> dict[str, Any]:
     return {
         "input_csv": req.input_csv,
         "total_rows": total_rows,
+        "filtered_total_rows": filtered_total,
         "page": page,
         "page_size": limit,
-        "total_pages": max(1, (total_rows + limit - 1) // limit),
+        "total_pages": max(1, (filtered_total + limit - 1) // limit),
         "empty_label_count": empty_count,
+        "only_empty": only_empty,
         "rows": rows,
         "allowed_labels": INVOICE_LABELS,
     }
@@ -2368,7 +2376,29 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
     if not csv_path.exists():
         raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
 
-    grouped: dict[str, dict[str, Any]] = {}
+    def _new_doc_slot(doc_id: str) -> dict[str, Any]:
+        return {"doc_id": doc_id, "total_nodes": 0, "empty_labels": 0, "labels": {}, "samples": []}
+
+    docs: list[dict[str, Any]] = []
+    current_doc_id: str | None = None
+    current_slot: dict[str, Any] | None = None
+    total_docs = 0
+    page_size = max(1, min(req.page_size, 200))
+    page = max(1, req.page)
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    def _flush_current() -> None:
+        nonlocal current_doc_id, current_slot, total_docs, docs
+        if current_slot is None:
+            return
+        idx = total_docs
+        total_docs += 1
+        if start <= idx < end:
+            docs.append(current_slot)
+        current_doc_id = None
+        current_slot = None
+
     with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         fields = reader.fieldnames or []
@@ -2379,28 +2409,25 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
             doc_id = str(row.get(req.doc_id_col, "") or "").strip() or "UNKNOWN_DOC"
             text = str(row.get(req.text_col, "") or "").strip()
             label = str(row.get(req.label_col, "") or "").strip().upper() or "UNLABELED"
-            slot = grouped.setdefault(
-                doc_id,
-                {"doc_id": doc_id, "total_nodes": 0, "empty_labels": 0, "labels": {}, "samples": []},
-            )
+            if current_doc_id != doc_id:
+                _flush_current()
+                current_doc_id = doc_id
+                current_slot = _new_doc_slot(doc_id)
+            slot = current_slot
+            if slot is None:
+                continue
             slot["total_nodes"] += 1
             if label == "UNLABELED":
                 slot["empty_labels"] += 1
             slot["labels"][label] = slot["labels"].get(label, 0) + 1
             if len(slot["samples"]) < 8:
                 slot["samples"].append({"text": text, "label": label})
+    _flush_current()
 
     image_index = _stage_b_image_index(csv_path.parent)
-    all_docs = list(grouped.values())
-    page_size = max(1, min(req.page_size, 200))
-    page = max(1, req.page)
-    total_docs = len(all_docs)
     total_pages = max(1, (total_docs + page_size - 1) // page_size)
     if page > total_pages:
         page = total_pages
-    start = (page - 1) * page_size
-    end = start + page_size
-    docs = all_docs[start:end]
     for d in docs:
         d["preview_path"] = _find_image_for_doc(d["doc_id"], image_index)
 

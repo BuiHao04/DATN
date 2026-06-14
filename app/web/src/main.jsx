@@ -599,6 +599,7 @@ function App(){
   const lastLog=(j)=>{if(!j) return "Chưa có log"; const t=(j.stderr||j.stdout||"").trim(); if(!t) return "Job đã tạo, đang chờ log..."; return t.split(/\r?\n/).slice(-25).join("\n");};
 
   const apiPost=async(url,body)=>{const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const d=await r.json();setOut(JSON.stringify(d,null,2));await loadJobs();return d;};
+  const setOutSummary=(title, data)=>setOut(JSON.stringify({title, ...data}, null, 2));
   const upload=async()=>{if(!files.length) return; const fd=new FormData(); files.forEach(f=>fd.append("files",f)); if(subdir.trim()) fd.append("subdir",subdir.trim()); const r=await fetch("/api/files/upload-images",{method:"POST",body:fd}); const d=await r.json(); setOut(JSON.stringify(d,null,2)); await loadRecentRaw(); await loadJobs();};
   const clearOldFiles=async()=>{const d=await apiPost("/api/files/clear-stage-b-raw-images",{}); setFiles([]); setSubdir(""); setPickMode("files"); setPickerKey(v=>v+1); await loadRecentRaw(); return d;};
   const runOcrBatch=async()=>{await apiPost("/api/pipeline/prepare-ocr-labeling",ocr);};
@@ -623,6 +624,7 @@ function App(){
           text_col: "text",
           limit: Number(labelLimit||100),
           page: targetPage,
+          only_empty: onlyMissing ? 1 : 0,
         })
       });
       const d=await r.json();
@@ -639,7 +641,15 @@ function App(){
       setLabelPage(Number(d.page||targetPage));
       setTotalPages(Number(d.total_pages||1));
       setLabelHint(`Đã tải ${rows.length} dòng để rà soát. Còn ${d.empty_label_count||0} dòng thiếu nhãn trên tổng ${d.total_rows||0} dòng.`);
-      setOut(JSON.stringify(d,null,2));
+      setOutSummary("labeling_sample", {
+        page: d.page,
+        page_size: d.page_size,
+        total_rows: d.total_rows,
+        filtered_total_rows: d.filtered_total_rows,
+        empty_label_count: d.empty_label_count,
+        only_empty: d.only_empty,
+        returned_rows: rows.length,
+      });
     }catch(e){
       setLabelRows([]);
       setLabelHint("Không gọi được API tải dòng thiếu nhãn.");
@@ -816,6 +826,13 @@ function App(){
     setDocPage(Number(d.page||targetPage));
     setDocTotalPages(Number(d.total_pages||1));
     setDocTotal(Number(d.total_docs||0));
+    setOutSummary("labeling_by_doc", {
+      page: d.page,
+      page_size: d.page_size,
+      total_docs: d.total_docs,
+      total_pages: d.total_pages,
+      returned_docs: (d.docs||[]).length,
+    });
     if((d.docs||[]).length && (!graphInspect || !(d.docs||[]).some(x=>x.doc_id===graphInspect.doc_id))){
       openGraphInspect(d.docs[0].doc_id);
     }
@@ -844,12 +861,17 @@ function App(){
         })
       });
       const d=await r.json();
-      setOut(JSON.stringify(d,null,2));
       if(!r.ok){
         setLabelHint(`Lỗi xem chi tiết graph của ảnh: ${d?.detail || "unknown"}`);
         setGraphInspect(null);
         return;
       }
+      setOutSummary("labeling_graph_inspect", {
+        doc_id: d.doc_id,
+        num_nodes: d.graph?.num_nodes || 0,
+        num_edges: d.graph?.num_edges || 0,
+        preview_path: d.preview_path || "",
+      });
       setGraphInspect({...d, nodes:(d.nodes||[]).map(x=>({...x, picked_label:x.label||""}))});
     }catch{
       setLabelHint("Không gọi được API xem graph cho ảnh.");

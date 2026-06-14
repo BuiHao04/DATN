@@ -853,6 +853,20 @@ def _find_image_for_doc(doc_id: str, image_index: list[Path]) -> str | None:
     return None
 
 
+def _preview_path_from_image_relpath(base_dir: Path, image_relpath: str) -> str | None:
+    rel = str(image_relpath or "").strip().replace("\\", "/")
+    if not rel:
+        return None
+    candidates = [
+        base_dir / "images" / rel,
+        STAGE_B_RAW_DIR / rel,
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return _project_relative_path(candidate)
+    return None
+
+
 def _load_doc_quads_from_ocr_json(input_csv_path: Path, doc_id: str) -> list[list[list[float]]]:
     try:
         ocr_json_path = input_csv_path.parent / "ocr_json" / f"{doc_id}.json"
@@ -2377,7 +2391,7 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
 
     def _new_doc_slot(doc_id: str) -> dict[str, Any]:
-        return {"doc_id": doc_id, "total_nodes": 0, "empty_labels": 0, "labels": {}, "samples": []}
+        return {"doc_id": doc_id, "total_nodes": 0, "empty_labels": 0, "labels": {}, "samples": [], "image_relpath": ""}
 
     docs: list[dict[str, Any]] = []
     current_doc_id: str | None = None
@@ -2414,6 +2428,7 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
             doc_id = str(row.get(req.doc_id_col, "") or "").strip() or "UNKNOWN_DOC"
             text = str(row.get(req.text_col, "") or "").strip()
             label = str(row.get(req.label_col, "") or "").strip().upper() or "UNLABELED"
+            image_relpath = str(row.get("image_relpath", "") or "").strip()
             if current_doc_id != doc_id:
                 _flush_current()
                 if stop_reading:
@@ -2427,13 +2442,15 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
             if label == "UNLABELED":
                 slot["empty_labels"] += 1
             slot["labels"][label] = slot["labels"].get(label, 0) + 1
+            if not slot["image_relpath"] and image_relpath:
+                slot["image_relpath"] = image_relpath
             if len(slot["samples"]) < 8:
                 slot["samples"].append({"text": text, "label": label})
     _flush_current()
 
-    image_index = _stage_b_image_index(csv_path.parent)
     for d in docs:
-        d["preview_path"] = _find_image_for_doc(d["doc_id"], image_index)
+        d["preview_path"] = _preview_path_from_image_relpath(csv_path.parent, str(d.get("image_relpath", "")))
+        d.pop("image_relpath", None)
 
     return {
         "input_csv": req.input_csv,
@@ -2522,8 +2539,13 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
         edge_index[1].append(dst)
         adjacency[src][dst] = 1
 
-    image_index = _stage_b_image_index(csv_path.parent)
-    preview_path = _find_image_for_doc(req.doc_id, image_index)
+    preview_path = _preview_path_from_image_relpath(
+        csv_path.parent,
+        str(doc_rows[0].get("image_relpath", "") if doc_rows else ""),
+    )
+    if not preview_path:
+        image_index = _stage_b_image_index(csv_path.parent)
+        preview_path = _find_image_for_doc(req.doc_id, image_index)
     feature_names = ["text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score"]
     node_items = []
     for i, node in enumerate(nodes):

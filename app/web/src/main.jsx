@@ -830,9 +830,6 @@ function App(){
       has_next: d.has_next,
       returned_docs: (d.docs||[]).length,
     });
-    if((d.docs||[]).length && (!graphInspect || !(d.docs||[]).some(x=>x.doc_id===graphInspect.doc_id))){
-      openGraphInspect(d.docs[0].doc_id);
-    }
   };
   const openGraphInspect=async(docId)=>{
     setGraphInspectLoading(true);
@@ -2108,7 +2105,7 @@ function App(){
                       {filteredDocs.map((doc)=>(
                         <div key={doc.doc_id} className={`doc-item ${graphInspect?.doc_id===doc.doc_id?"active":""}`} onClick={()=>openGraphInspect(doc.doc_id)}>
                           <div>
-                            {doc.preview_path ? <img className="thumb" src={`/api/files/image?path=${encodeURIComponent(doc.preview_path)}`} alt={doc.doc_id}/> : <div className="thumb" />}
+                            {doc.preview_path ? <img className="thumb" loading="lazy" decoding="async" src={`/api/files/image?path=${encodeURIComponent(doc.preview_path)}`} alt={doc.doc_id}/> : <div className="thumb" />}
                           </div>
                           <div className="doc-meta">
                             <div className="doc-id">{doc.doc_id}</div>

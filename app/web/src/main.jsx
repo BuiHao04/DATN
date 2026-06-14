@@ -415,8 +415,7 @@ function App(){
   const [docFilter,setDocFilter]=useState("all");
   const [docPage,setDocPage]=useState(1);
   const [docPageSize,setDocPageSize]=useState(40);
-  const [docTotalPages,setDocTotalPages]=useState(1);
-  const [docTotal,setDocTotal]=useState(0);
+  const [docHasNext,setDocHasNext]=useState(false);
   const [inspectTab,setInspectTab]=useState("ocr");
   const [activeNodeIndex,setActiveNodeIndex]=useState(-1);
   const [imageNatural,setImageNatural]=useState({w:1,h:1});
@@ -824,13 +823,11 @@ function App(){
     });
     setDocView(d.docs||[]);
     setDocPage(Number(d.page||targetPage));
-    setDocTotalPages(Number(d.total_pages||1));
-    setDocTotal(Number(d.total_docs||0));
+    setDocHasNext(Boolean(d.has_next));
     setOutSummary("labeling_by_doc", {
       page: d.page,
       page_size: d.page_size,
-      total_docs: d.total_docs,
-      total_pages: d.total_pages,
+      has_next: d.has_next,
       returned_docs: (d.docs||[]).length,
     });
     if((d.docs||[]).length && (!graphInspect || !(d.docs||[]).some(x=>x.doc_id===graphInspect.doc_id))){
@@ -2089,7 +2086,7 @@ function App(){
                   <div className="review-pane">
                     <div className="review-pane-head">
                       <h4>Danh sách hóa đơn để rà</h4>
-                      <div className="tiny">Trang {docPage}/{docTotalPages} | tổng {docTotal} ảnh</div>
+                      <div className="tiny">Trang {docPage} | tải {docPageSize} ảnh mỗi lần | {docHasNext ? "còn trang sau" : "đang là trang cuối hiện có"}</div>
                     </div>
                     <div className="review-pane-body">
                       <div className="doc-toolbar">
@@ -2103,8 +2100,8 @@ function App(){
                       <div className="doc-pager" style={{marginTop:8}}>
                         <input className="input" type="number" min="10" max="100" value={docPageSize} onChange={e=>setDocPageSize(e.target.value)} />
                         <button className="btn" onClick={()=>loadByDoc(1)}>Tải danh sách ảnh</button>
-                        <button className="btn" onClick={()=>{const p=Math.max(1, Number(docPage)-1); loadByDoc(p);}}>Trang trước</button>
-                        <button className="btn" onClick={()=>{const p=Math.min(docTotalPages, Number(docPage)+1); loadByDoc(p);}}>Trang sau</button>
+                        <button className="btn" onClick={()=>{const p=Math.max(1, Number(docPage)-1); loadByDoc(p);}} disabled={Number(docPage)<=1}>Trang trước</button>
+                        <button className="btn" onClick={()=>{loadByDoc(Number(docPage)+1);}} disabled={!docHasNext}>Trang sau</button>
                       </div>
                     </div>
                     <div className="review-list">

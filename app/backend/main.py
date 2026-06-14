@@ -2383,19 +2383,24 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
     current_doc_id: str | None = None
     current_slot: dict[str, Any] | None = None
     total_docs = 0
+    has_next = False
+    stop_reading = False
     page_size = max(1, min(req.page_size, 200))
     page = max(1, req.page)
     start = (page - 1) * page_size
     end = start + page_size
 
     def _flush_current() -> None:
-        nonlocal current_doc_id, current_slot, total_docs, docs
+        nonlocal current_doc_id, current_slot, total_docs, docs, has_next, stop_reading
         if current_slot is None:
             return
         idx = total_docs
         total_docs += 1
         if start <= idx < end:
             docs.append(current_slot)
+        elif idx >= end:
+            has_next = True
+            stop_reading = True
         current_doc_id = None
         current_slot = None
 
@@ -2411,6 +2416,8 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
             label = str(row.get(req.label_col, "") or "").strip().upper() or "UNLABELED"
             if current_doc_id != doc_id:
                 _flush_current()
+                if stop_reading:
+                    break
                 current_doc_id = doc_id
                 current_slot = _new_doc_slot(doc_id)
             slot = current_slot
@@ -2425,18 +2432,15 @@ def labeling_by_doc(req: LabelingByDocRequest) -> dict[str, Any]:
     _flush_current()
 
     image_index = _stage_b_image_index(csv_path.parent)
-    total_pages = max(1, (total_docs + page_size - 1) // page_size)
-    if page > total_pages:
-        page = total_pages
     for d in docs:
         d["preview_path"] = _find_image_for_doc(d["doc_id"], image_index)
 
     return {
         "input_csv": req.input_csv,
-        "total_docs": total_docs,
         "page": page,
         "page_size": page_size,
-        "total_pages": total_pages,
+        "has_next": has_next,
+        "returned_docs": len(docs),
         "docs": docs,
     }
 

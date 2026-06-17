@@ -13,6 +13,7 @@ import random
 import unicodedata
 import time
 import tempfile
+import io
 from urllib import request as urllib_request
 from datetime import datetime
 from pathlib import Path
@@ -25,8 +26,9 @@ if str(SRC_DIR) not in sys.path:
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 from pipeline.core.gcn_classifier import build_features
 from pipeline.core.graph_builder import build_graph_edges
@@ -2907,11 +2909,30 @@ def clear_stage_b_raw_images() -> dict[str, Any]:
 
 
 @app.get("/api/files/image")
-def file_image(path: str) -> FileResponse:
+def file_image(path: str, max_side: int | None = None) -> Response:
     target = _resolve_project_path(path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Image not found")
-    return FileResponse(str(target))
+    if not max_side or max_side <= 0:
+        return FileResponse(str(target))
+    safe_side = max(48, min(int(max_side), 2048))
+    try:
+        with Image.open(target) as im:
+            im = ImageOps.exif_transpose(im)
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            elif im.mode == "L":
+                im = im.convert("RGB")
+            im.thumbnail((safe_side, safe_side), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=82, optimize=True)
+            return Response(
+                content=buf.getvalue(),
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+    except Exception:
+        return FileResponse(str(target))
 
 
 @app.get("/api/files/json")

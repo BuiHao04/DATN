@@ -432,10 +432,10 @@ function App(){
   const [recentRaw,setRecentRaw]=useState([]);
   const [allRawImages,setAllRawImages]=useState([]);
   const [ocr,setOcr]=useState({
-    input_dir:"data/stage_b_raw_images",
+    input_dir:"data/stage_b_raw_v2",
     output_dir:"data/labeling_stage_b",
     lang:"vi",
-    ocr_engine:"paddle",
+    ocr_engine:"vietocr",
     det_db_thresh:0.25,
     det_db_box_thresh:0.6,
     det_db_unclip_ratio:1.25,
@@ -449,6 +449,7 @@ function App(){
     overwrite_existing:1
   });
   const [dataset,setDataset]=useState({input_csv:"data/labeling_stage_b/nodes_to_label.csv",output_json:"data/stage_b_vi_dataset.json"});
+  const [trainSubset,setTrainSubset]=useState({output_dir:"data/train_stage_b",limit:1000});
   const [labelRows,setLabelRows]=useState([]);
   const [allowedLabels,setAllowedLabels]=useState(LABELS);
   const [labelHint,setLabelHint]=useState("");
@@ -459,6 +460,8 @@ function App(){
   const [previewImage,setPreviewImage]=useState("");
   const [graphInspect,setGraphInspect]=useState(null);
   const [graphInspectLoading,setGraphInspectLoading]=useState(false);
+  const [aiDocLoading,setAiDocLoading]=useState(false);
+  const [saveFlash,setSaveFlash]=useState("");
   const [docSearch,setDocSearch]=useState("");
   const [docFilter,setDocFilter]=useState("all");
   const [docPage,setDocPage]=useState(1);
@@ -468,6 +471,19 @@ function App(){
   const [activeNodeIndex,setActiveNodeIndex]=useState(-1);
   const [imageNatural,setImageNatural]=useState({w:1,h:1});
   const [missingOnly,setMissingOnly]=useState(false);
+  const [galleryDir,setGalleryDir]=useState("data/labeling_top1000");
+  const [galleryItems,setGalleryItems]=useState([]);
+  const [galleryTotal,setGalleryTotal]=useState(0);
+  const [galleryPage,setGalleryPage]=useState(1);
+  const [galleryPages,setGalleryPages]=useState(0);
+  const [galleryPageSize,setGalleryPageSize]=useState(60);
+  const [gallerySort,setGallerySort]=useState("score_desc");
+  const [galleryShowBoxes,setGalleryShowBoxes]=useState(false);
+  const [galleryLoading,setGalleryLoading]=useState(false);
+  const [galleryZoom,setGalleryZoom]=useState(null);
+  const [galleryInspect,setGalleryInspect]=useState(null);
+  const [galleryInspectLoading,setGalleryInspectLoading]=useState(false);
+  const [galleryInspectAiLoading,setGalleryInspectAiLoading]=useState(false);
   const [reviewSearch,setReviewSearch]=useState("");
   const [reviewNodeFilter,setReviewNodeFilter]=useState("all");
   const [inferNodeFilter,setInferNodeFilter]=useState("all");
@@ -494,7 +510,7 @@ function App(){
   const [inferOne,setInferOne]=useState({
     image:"",
     lang:"vi",
-    ocr_engine:"paddle",
+    ocr_engine:"vietocr",
     checkpoint:"outputs/checkpoints/gcn_stage_b.pt",
     ocr_debug_image:"outputs/ocr_boxes_single.jpg",
     output_json:"outputs/gcn_infer_single.json",
@@ -503,7 +519,7 @@ function App(){
   const [singleCheck,setSingleCheck]=useState({
     image:"",
     lang:"vi",
-    ocr_engine:"paddle",
+    ocr_engine:"vietocr",
     det_db_thresh:0.25,
     det_db_box_thresh:0.6,
     det_db_unclip_ratio:1.25,
@@ -703,20 +719,38 @@ function App(){
     }
   };
   const saveLabelUpdates=async()=>{const updates=labelRows.filter(r=>String(r.picked_label||"").trim()!=="").map(r=>({row_number:r.row_number,label:r.picked_label})); const d=await apiPost("/api/pipeline/labeling-apply",{input_csv:dataset.input_csv,label_col:"label",updates}); if(d?.updated>=0){setLabelHint(`Đã lưu ${d.updated} dòng.`); await loadLabelPreview();}};
-  const autoSuggestLabels=async()=>{
+  const autoSuggestLabels=async(onlyEmpty=1)=>{
+    if(onlyEmpty===0 && !window.confirm("Đánh nhãn lại sẽ GHI ĐÈ toàn bộ nhãn hiện có (cả nhãn đã sửa tay). Tiếp tục?")) return;
     const d=await apiPost("/api/pipeline/labeling-auto-suggest-start",{
       input_csv:dataset.input_csv,
       label_col:"label",
       text_col:"text",
       doc_id_col:"doc_id",
-      only_empty:1,
+      only_empty:onlyEmpty,
       llm_model:"gpt-4.1-mini",
       batch_docs:10,
       llm_text_batch_size:10,
       require_llm:1
     });
     if(d?.id){
-      setLabelHint(`Đã tạo job AI gợi ý nhãn cho các dòng còn trống: ${d.id}. Job sẽ lưu sau từng batch và bấm chạy tiếp sẽ không gán lại phần đã xong.`);
+      setLabelHint(onlyEmpty===0
+        ? `Đã tạo job AI đánh nhãn LẠI toàn bộ (ghi đè): ${d.id}.`
+        : `Đã tạo job AI gợi ý nhãn cho các dòng còn trống: ${d.id}. Job sẽ lưu sau từng batch và bấm chạy tiếp sẽ không gán lại phần đã xong.`);
+    }
+  };
+  const exportTrainSubset=async()=>{
+    const d=await apiPost("/api/pipeline/export-train-subset",{
+      input_csv:dataset.input_csv,
+      output_dir:trainSubset.output_dir,
+      limit:Number(trainSubset.limit||1000),
+      label_col:"label",
+      doc_id_col:"doc_id",
+      copy_images:1,
+      copy_ocr_json:1
+    });
+    if(d){
+      setLabelHint(`Đã tách ${d.exported_docs} ảnh đã đánh đủ nhãn (${d.exported_rows} dòng) sang ${d.output_dir}. ${d.reached_limit?`Đã đạt giới hạn ${d.limit} ảnh và dừng.`:`Chưa đủ ${d.limit} ảnh — mới có bấy nhiêu ảnh đủ nhãn.`} Copy ảnh: ${d.copied_images}, json: ${d.copied_ocr_json}.`);
+      setOutSummary("export_train_subset", d);
     }
   };
   const runDatasetCompile=async()=>{const v=await apiPost("/api/pipeline/validate-label-csv",{input_csv:dataset.input_csv,label_col:"label"}); if(!v?.ok){setOut(JSON.stringify({status:"blocked",reason:"Còn label rỗng, cần gán nhãn trước",validate:v},null,2)); return;} await apiPost("/api/pipeline/preprocess-gcn-dataset",dataset);};
@@ -888,6 +922,26 @@ function App(){
       returned_docs: (d.docs||[]).length,
     });
   };
+  const loadGallery=async(pageOverride=null)=>{
+    const targetPage = pageOverride ?? Number(galleryPage||1);
+    setGalleryLoading(true);
+    try{
+      const qs=new URLSearchParams({dir:galleryDir,page:String(targetPage),page_size:String(galleryPageSize||60),sort:gallerySort,label_csv:galleryCsv(),label_col:"label",doc_id_col:"doc_id"});
+      const r=await fetch(`/api/pipeline/labeling-gallery?${qs.toString()}`);
+      const d=await r.json();
+      if(!r.ok){ setLabelHint(`Không tải được gallery: ${d?.detail||r.status}`); setGalleryItems([]); return; }
+      setGalleryItems(d.items||[]);
+      setGalleryTotal(Number(d.total||0));
+      setGalleryPage(Number(d.page||targetPage));
+      setGalleryPages(Number(d.total_pages||0));
+      setOutSummary("labeling_gallery",{dir:d.dir,total:d.total,page:d.page,total_pages:d.total_pages,returned:(d.items||[]).length});
+    }catch{
+      setLabelHint("Không gọi được API gallery 1000 ảnh.");
+      setGalleryItems([]);
+    }finally{
+      setGalleryLoading(false);
+    }
+  };
   const openGraphInspect=async(docId)=>{
     setGraphInspectLoading(true);
     setInspectTab("ocr");
@@ -931,14 +985,176 @@ function App(){
       setGraphInspectLoading(false);
     }
   };
+  const flashSaved=(msg)=>{ setSaveFlash(msg); setTimeout(()=>setSaveFlash(""), 4000); };
   const saveInspectLabels=async()=>{
-    if(!graphInspect?.nodes?.length) return;
+    if(!graphInspect?.nodes?.length){ setLabelHint("Chưa có ảnh/node nào để lưu."); return; }
+    const docId=graphInspect.doc_id;
     const updates=(graphInspect.nodes||[]).map(n=>({row_number:n.row_number,label:String(n.picked_label||"").trim()})).filter(x=>x.label!=="");
+    if(updates.length===0){ setLabelHint("Chưa có nhãn nào để lưu (tất cả node còn trống)."); flashSaved("⚠ Không có nhãn để lưu"); return; }
     const d=await apiPost("/api/pipeline/labeling-apply",{input_csv:dataset.input_csv,label_col:"label",updates});
     if(d?.updated>=0){
-      setLabelHint(`Đã lưu ${d.updated} nhãn của ảnh ${graphInspect.doc_id}.`);
+      setLabelHint(`✅ Đã lưu ${d.updated} nhãn của ảnh ${docId} vào CSV.`);
+      flashSaved(`✅ Đã lưu ${d.updated} nhãn cho ảnh này`);
+      await loadByDoc();
+      await openGraphInspect(docId);
+    }else{
+      setLabelHint(`Lưu thất bại: ${d?.detail || "unknown"}`);
+      flashSaved("❌ Lưu thất bại");
+    }
+  };
+  const aiSuggestForDoc=async(onlyEmpty=true)=>{
+    if(!graphInspect?.doc_id){ setLabelHint("Hãy chọn 1 ảnh trước khi gọi AI đánh nhãn."); return; }
+    setAiDocLoading(true);
+    try{
+      const r=await fetch("/api/pipeline/labeling-suggest-doc",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          input_csv:dataset.input_csv,
+          doc_id:graphInspect.doc_id,
+          label_col:"label",
+          text_col:"text",
+          doc_id_col:"doc_id",
+          llm_model:"gpt-4.1-mini",
+          only_empty: onlyEmpty ? 1 : 0,
+          require_llm:1
+        })
+      });
+      const d=await r.json();
+      setOut(JSON.stringify(d,null,2));
+      if(!r.ok){
+        setLabelHint(`Lỗi AI đánh nhãn ảnh này: ${d?.detail || "unknown"}`);
+        return;
+      }
+      // LLM thất bại (vd hết quota OpenAI / rate limit) -> KHÔNG lưu nhãn rác từ rule fallback.
+      const errs=d.stats?.llm_errors||[];
+      const mode0=String(d.stats?.strategy_used||"");
+      const llmFailed = errs.length>0 || mode0.includes("fallback") || Number(d.stats?.llm_batches||0)===0;
+      if(llmFailed){
+        setLabelHint(`AI không gọi được LLM nên KHÔNG lưu (tránh gán bừa). Lý do: ${errs[0] || mode0 || "unknown"}. Kiểm tra quota/billing OpenAI rồi thử lại.`);
+        return;
+      }
+      const suggMap=new Map((d.suggestions||[]).map(s=>[Number(s.row_number), String(s.label||"")]));
+      if(suggMap.size===0){
+        setLabelHint(`AI không có nhãn để gợi ý cho ảnh ${d.doc_id}.`);
+        return;
+      }
+      // Fill suggestions into the review nodes (keep manual labels when chỉ điền ô trống).
+      setGraphInspect(prev=>prev?{
+        ...prev,
+        nodes:(prev.nodes||[]).map(n=>{
+          if(!suggMap.has(Number(n.row_number))) return n;
+          if(onlyEmpty && String(n.picked_label||"").trim()!=="") return n;
+          return {...n, picked_label: suggMap.get(Number(n.row_number))};
+        })
+      }:prev);
+      // Persist ngay sau khi điền (AI đánh nhãn xong là lưu luôn).
+      const updates=(graphInspect.nodes||[]).map(n=>{
+        const sug=suggMap.get(Number(n.row_number));
+        const keep=onlyEmpty && String(n.picked_label||"").trim()!=="";
+        const label=(sug!=null && !keep) ? sug : String(n.picked_label||"").trim();
+        return {row_number:n.row_number, label};
+      }).filter(x=>x.label!=="");
+      const ap=await apiPost("/api/pipeline/labeling-apply",{input_csv:dataset.input_csv,label_col:"label",updates});
+      const mode=d.stats?.strategy_used || "?";
+      setLabelHint(`AI đã gán ${d.suggested_count||suggMap.size} nhãn (mode=${mode}) và lưu ${ap?.updated||0} dòng cho ảnh ${d.doc_id}.`);
+      flashSaved(`✅ AI đã gán & lưu ${ap?.updated||0} nhãn cho ảnh này`);
+      // Hiển thị kết quả ngay trong bảng "Node OCR và nhãn của hóa đơn này":
+      // bỏ lọc + về tab rà nhãn để các node vừa gán không bị ẩn.
+      setReviewSearch("");
+      setReviewNodeFilter("all");
+      setInspectTab("ocr");
       await loadByDoc();
       await openGraphInspect(graphInspect.doc_id);
+    }catch(e){
+      setLabelHint("Không gọi được API AI đánh nhãn cho ảnh.");
+    }finally{
+      setAiDocLoading(false);
+    }
+  };
+
+  const galleryCsv=()=>`${String(galleryDir||"").replace(/\/+$/,"")}/nodes_to_label.csv`;
+  const openGalleryInspect=async(docId)=>{
+    setGalleryInspectLoading(true);
+    setGalleryInspect(null);
+    try{
+      const r=await fetch("/api/pipeline/labeling-graph-inspect",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          input_csv:galleryCsv(),doc_id:docId,label_col:"label",text_col:"text",doc_id_col:"doc_id",
+          score_col:"score",x1_col:"x1",y1_col:"y1",x2_col:"x2",y2_col:"y2",same_line_ratio:1.2,near_threshold:250
+        })
+      });
+      const d=await r.json();
+      if(!r.ok){ setLabelHint(`Lỗi mở ảnh để sửa: ${d?.detail || "unknown"}`); return; }
+      setGalleryInspect({...d, nodes:(d.nodes||[]).map(x=>({...x, picked_label:x.label||"", edit_text:String(x.text??"")}))});
+    }catch{
+      setLabelHint("Không gọi được API mở ảnh để sửa.");
+    }finally{
+      setGalleryInspectLoading(false);
+    }
+  };
+  const saveGalleryInspect=async()=>{
+    if(!galleryInspect?.nodes?.length){ setLabelHint("Chưa có node nào để lưu."); return; }
+    const updates=(galleryInspect.nodes||[]).map(n=>{
+      const obj={row_number:n.row_number,label:String(n.picked_label||"").trim()};
+      if(n.edit_text!=null && String(n.edit_text)!==String(n.text??"")) obj.text=String(n.edit_text);
+      return obj;
+    }).filter(u=>u.label!=="" || u.text!==undefined);
+    if(updates.length===0){ setLabelHint("Chưa có thay đổi nào để lưu."); flashSaved("⚠ Không có thay đổi"); return; }
+    const d=await apiPost("/api/pipeline/labeling-apply",{input_csv:galleryCsv(),label_col:"label",text_col:"text",updates});
+    if(d && d.updated>=0){
+      setLabelHint(`✅ Đã lưu ${d.updated} nhãn và ${d.text_updated||0} sửa chữ cho ảnh ${galleryInspect.doc_id}.`);
+      flashSaved(`✅ Đã lưu ảnh này (${d.updated} nhãn, ${d.text_updated||0} chữ)`);
+      await openGalleryInspect(galleryInspect.doc_id);
+      loadGallery(galleryPage);
+    }else{
+      setLabelHint(`Lưu thất bại: ${d?.detail || "unknown"}`);
+      flashSaved("❌ Lưu thất bại");
+    }
+  };
+  const aiGalleryInspect=async(onlyEmpty=true)=>{
+    if(!galleryInspect?.doc_id){ setLabelHint("Hãy mở 1 ảnh trước khi gọi AI."); return; }
+    setGalleryInspectAiLoading(true);
+    try{
+      const r=await fetch("/api/pipeline/labeling-suggest-doc",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          input_csv:galleryCsv(),doc_id:galleryInspect.doc_id,label_col:"label",text_col:"text",
+          doc_id_col:"doc_id",llm_model:"gpt-4.1-mini",only_empty:onlyEmpty?1:0,require_llm:1
+        })
+      });
+      const d=await r.json();
+      if(!r.ok){ setLabelHint(`Lỗi AI đánh nhãn ảnh này: ${d?.detail || "unknown"}`); return; }
+      const errs=d.stats?.llm_errors||[];
+      const mode0=String(d.stats?.strategy_used||"");
+      const llmFailed = errs.length>0 || mode0.includes("fallback") || Number(d.stats?.llm_batches||0)===0;
+      if(llmFailed){ setLabelHint(`AI không gọi được LLM nên KHÔNG lưu (tránh gán bừa). Lý do: ${errs[0] || mode0 || "unknown"}.`); return; }
+      const suggMap=new Map((d.suggestions||[]).map(sg=>[Number(sg.row_number), String(sg.label||"")]));
+      if(suggMap.size===0){ setLabelHint(`AI không có nhãn để gợi ý cho ảnh ${d.doc_id}.`); return; }
+      setGalleryInspect(prev=>prev?{
+        ...prev,
+        nodes:(prev.nodes||[]).map(n=>{
+          if(!suggMap.has(Number(n.row_number))) return n;
+          if(onlyEmpty && String(n.picked_label||"").trim()!=="") return n;
+          return {...n, picked_label: suggMap.get(Number(n.row_number))};
+        })
+      }:prev);
+      const updates=(galleryInspect.nodes||[]).map(n=>{
+        const sug=suggMap.get(Number(n.row_number));
+        const keep=onlyEmpty && String(n.picked_label||"").trim()!=="";
+        const label=(sug!=null && !keep) ? sug : String(n.picked_label||"").trim();
+        return {row_number:n.row_number, label};
+      }).filter(x=>x.label!=="");
+      const ap=await apiPost("/api/pipeline/labeling-apply",{input_csv:galleryCsv(),label_col:"label",updates});
+      setLabelHint(`AI đã gán & lưu ${ap?.updated||0} nhãn cho ảnh ${d.doc_id}.`);
+      flashSaved(`✅ AI đã gán & lưu ${ap?.updated||0} nhãn`);
+    }catch{
+      setLabelHint("Không gọi được API AI đánh nhãn cho ảnh.");
+    }finally{
+      setGalleryInspectAiLoading(false);
     }
   };
 
@@ -2131,13 +2347,13 @@ function App(){
                   </TrainField>
                 </div>
                 <div className="row" style={{gridTemplateColumns:"220px 1fr", marginTop:8}}>
-                  <TrainField label="Engine OCR" hint={OCR_HELP.ocr_engine} help="Nếu bạn đang ưu tiên tốc độ thì thử PaddleOCR trước. Nếu ưu tiên text tiếng Việt có dấu, có thể so thêm với VietOCR.">
+                  <TrainField label="Engine OCR" hint={OCR_HELP.ocr_engine} help="KHUYẾN NGHỊ: VietOCR cho text tiếng Việt CÓ DẤU chính xác hơn hẳn (Paddle hay mất dấu/dính chữ). PaddleOCR nhanh hơn ~6x nhưng text nát, chỉ dùng khi cần tốc độ.">
                     <select className="input" value={ocr.ocr_engine} onChange={e=>setOcr({...ocr,ocr_engine:e.target.value})}>
-                      <option value="paddle">PaddleOCR</option>
-                      <option value="vietocr">Paddle detect + VietOCR</option>
+                      <option value="vietocr">VietOCR đọc chữ (Paddle dò box) — khuyến nghị</option>
+                      <option value="paddle">PaddleOCR (dò + đọc) — nhanh, text kém</option>
                     </select>
                   </TrainField>
-                  <div className="tiny">Nếu chọn `vietocr`, hệ thống sẽ giữ box của Paddle nhưng dùng VietOCR để đọc text trong từng box.</div>
+                  <div className="tiny">VietOCR chỉ ĐỌC chữ trong box, không tự dò box — nên luôn cần Paddle dò vị trí chữ trước. Vì vậy "VietOCR đọc chữ" chính là chế độ dùng VietOCR (không có lựa chọn "chỉ VietOCR").</div>
                 </div>
                 <div className="grid3" style={{marginTop:8}}>
                   <TrainField label="DB box thresh" hint={OCR_HELP.det_db_box_thresh} help="Gợi ý dễ bắt đầu: 0.55-0.60. Nếu box đang nuốt cả nền, tăng dần lên 0.62-0.68.">
@@ -2203,6 +2419,121 @@ function App(){
             </div>
 
             <div className="step">
+              <div className="step-head"><h3>Xem nhanh chất lượng ảnh đã chọn (top 1000)</h3><span className="badge idle">{galleryTotal?`${galleryTotal} ẢNH`:"GALLERY"}</span></div>
+              <div className="step-body">
+                <div className="p">Xem trực tiếp các ảnh OCR tốt nhất đã chọn để tự đánh giá chất lượng trước khi gán nhãn. Sắp theo điểm OCR trung bình hoặc số node.</div>
+                <div className="row" style={{gridTemplateColumns:"1fr 150px 110px 90px auto auto auto",marginTop:8,alignItems:"center"}}>
+                  <input className="input" value={galleryDir} onChange={e=>setGalleryDir(e.target.value)} placeholder="thư mục, vd data/labeling_top1000" />
+                  <select className="input" value={gallerySort} onChange={e=>setGallerySort(e.target.value)}>
+                    <option value="score_desc">Điểm OCR cao → thấp</option>
+                    <option value="score_asc">Điểm OCR thấp → cao</option>
+                    <option value="nodes_desc">Nhiều node → ít</option>
+                    <option value="nodes_asc">Ít node → nhiều</option>
+                  </select>
+                  <input className="input" type="number" min="12" max="200" value={galleryPageSize} onChange={e=>setGalleryPageSize(e.target.value)} title="số ảnh mỗi trang" />
+                  <label className="tiny" style={{display:"flex",alignItems:"center",gap:6}}><input type="checkbox" checked={galleryShowBoxes} onChange={e=>setGalleryShowBoxes(e.target.checked)} />Hiện box OCR</label>
+                  <button className="btn dark" onClick={()=>loadGallery(1)} disabled={galleryLoading}>{galleryLoading?"Đang tải...":"Xem ảnh"}</button>
+                  <button className="btn" onClick={()=>{const p=Math.max(1,Number(galleryPage)-1); loadGallery(p);}} disabled={galleryLoading||Number(galleryPage)<=1}>Trang trước</button>
+                  <button className="btn" onClick={()=>{loadGallery(Number(galleryPage)+1);}} disabled={galleryLoading||Number(galleryPage)>=Number(galleryPages)}>Trang sau</button>
+                </div>
+                {galleryPages>0 && <div className="tiny" style={{marginTop:6}}>Trang {galleryPage}/{galleryPages} | tổng {galleryTotal} ảnh</div>}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10,marginTop:10}}>
+                  {galleryItems.map((it)=>{
+                    const src=galleryShowBoxes&&it.debug_path?it.debug_path:it.image_path;
+                    const total=Number(it.num_rows||it.num_nodes||0);
+                    const labeled=Number(it.num_labeled||0);
+                    const done=total>0&&labeled>=total;
+                    const partial=labeled>0&&!done;
+                    const accent=done?"#16a34a":(partial?"#d97706":"#2a2f3a");
+                    return (
+                      <div key={it.doc_id} style={{position:"relative",border:`${done||partial?2:1}px solid ${accent}`,borderRadius:8,overflow:"hidden",background:"#0e1117",boxShadow:done?"0 0 0 1px #16a34a55":undefined}}>
+                        {(done||partial)&&(
+                          <span style={{position:"absolute",top:6,right:6,zIndex:2,fontSize:11,fontWeight:800,color:"#fff",background:accent,borderRadius:6,padding:"2px 7px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)"}}>
+                            {done?"✓ Đã gán":`Đang gán ${labeled}/${total}`}
+                          </span>
+                        )}
+                        {src ? <img loading="lazy" decoding="async" style={{width:"100%",height:150,objectFit:"cover",cursor:"pointer",display:"block",opacity:done?0.92:1}} src={`/api/files/image?path=${encodeURIComponent(src)}&max_side=400`} alt={it.doc_id} title="Bấm để xem + sửa nhãn/chữ OCR" onClick={()=>openGalleryInspect(it.doc_id)} /> : <div style={{height:150}} />}
+                        <div style={{padding:"6px 8px"}}>
+                          <div className="tiny" style={{fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={it.doc_id}>{it.doc_id}</div>
+                          <div className="tiny" style={{display:"flex",gap:8,marginTop:2,alignItems:"center"}}>
+                            <span className={`badge ${it.mean_score>=0.9?"success":(it.mean_score>=0.85?"idle":"queued")}`}>{it.mean_score}</span>
+                            <span>{it.num_nodes} node</span>
+                            {total>0&&<span style={{color:done?"#16a34a":(partial?"#d97706":"#6b7280"),fontWeight:700}}>· {labeled}/{total} nhãn</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {!galleryLoading && galleryItems.length===0 && <div className="tiny" style={{padding:12}}>Bấm "Xem ảnh" để tải gallery từ thư mục đã chọn.</div>}
+                </div>
+                {galleryZoom && (
+                  <div onClick={()=>setGalleryZoom(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",cursor:"zoom-out"}}>
+                    <img src={`/api/files/image?path=${encodeURIComponent(galleryZoom)}&max_side=1600`} alt="zoom" style={{maxWidth:"95%",maxHeight:"95%",objectFit:"contain"}} />
+                  </div>
+                )}
+                {(galleryInspect || galleryInspectLoading) && (
+                  <div onClick={()=>{ if(!galleryInspectLoading) setGalleryInspect(null); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+                    <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,width:"min(1180px,96vw)",height:"min(860px,94vh)",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",borderBottom:"1px solid #d6d3e3",background:"#f6f5fb"}}>
+                        <div style={{fontWeight:800,fontSize:14}}>Sửa nhãn & chữ OCR — <span style={{color:"#3049b9"}}>{galleryInspect?.doc_id||"..."}</span></div>
+                        <button className="modal-close" onClick={()=>{ if(!galleryInspectLoading) setGalleryInspect(null); }}>Đóng ✕</button>
+                      </div>
+                      {galleryInspectLoading ? (
+                        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#6b7280"}}>Đang tải ảnh & OCR...</div>
+                      ) : (
+                        <>
+                          <div style={{flex:1,display:"grid",gridTemplateColumns:"420px 1fr",gap:12,padding:12,overflow:"hidden"}}>
+                            <div style={{overflow:"auto",border:"1px solid #d4d1e0",borderRadius:8,background:"#0e1117",display:"flex",alignItems:"flex-start",justifyContent:"center"}}>
+                              {galleryInspect?.preview_path
+                                ? <img src={`/api/files/image?path=${encodeURIComponent(galleryInspect.preview_path)}&max_side=1400`} alt={galleryInspect.doc_id} style={{width:"100%",objectFit:"contain",cursor:"zoom-in"}} onClick={()=>setGalleryZoom(galleryInspect.preview_path)} />
+                                : <div style={{padding:20,color:"#9ca3af"}}>Không tìm thấy ảnh xem trước.</div>}
+                            </div>
+                            <div style={{overflow:"auto",border:"1px solid #d4d1e0",borderRadius:8}}>
+                              <table className="tbl">
+                                <thead>
+                                  <tr>
+                                    <th style={{width:54}}>Dòng</th>
+                                    <th>Chữ OCR (sửa được)</th>
+                                    <th style={{width:180}}>Nhãn</th>
+                                    <th style={{width:70}}>Score</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(galleryInspect?.nodes||[]).map((node)=>(
+                                    <tr key={node.node_index}>
+                                      <td>{node.row_number}</td>
+                                      <td>
+                                        <input className="input" value={node.edit_text??""} onChange={e=>setGalleryInspect(prev=>({...prev,nodes:prev.nodes.map(x=>x.node_index===node.node_index?{...x,edit_text:e.target.value}:x)}))} style={String(node.edit_text??"")!==String(node.text??"")?{borderColor:"#d97706",background:"#fff7ed"}:undefined} />
+                                      </td>
+                                      <td>
+                                        <select className="input" value={node.picked_label||""} onChange={e=>setGalleryInspect(prev=>({...prev,nodes:prev.nodes.map(x=>x.node_index===node.node_index?{...x,picked_label:e.target.value}:x)}))}>
+                                          <option value="">-- chọn nhãn --</option>
+                                          {allowedLabels.map(lb=><option key={lb} value={lb}>{labelText(lb)}</option>)}
+                                        </select>
+                                      </td>
+                                      <td>{Number(node.score || 0).toFixed(3)}</td>
+                                    </tr>
+                                  ))}
+                                  {(galleryInspect?.nodes||[]).length===0 && <tr><td colSpan={4} className="tiny" style={{padding:12}}>Ảnh này không có node OCR.</td></tr>}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",borderTop:"1px solid #d6d3e3",background:"#f6f5fb"}}>
+                            <button className="btn dark" onClick={saveGalleryInspect}>💾 Lưu nhãn & chữ</button>
+                            <button className="btn" onClick={()=>aiGalleryInspect(true)} disabled={galleryInspectAiLoading}>{galleryInspectAiLoading?"AI đang chạy...":"🤖 AI đánh nhãn ô trống"}</button>
+                            <button className="btn" onClick={()=>aiGalleryInspect(false)} disabled={galleryInspectAiLoading}>🤖 AI đánh lại toàn bộ</button>
+                            <span className="tiny" style={{marginLeft:"auto",color:"#6b7280"}}>{(galleryInspect?.nodes||[]).length} node • CSV: {galleryCsv()}</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="step">
               <div className="step-head"><h3>Bước 3: Hoàn tất nhãn và compile dataset</h3><span className={`badge ${statusClass(dsJob?.status)}`}>{(dsJob?.status||"idle").toUpperCase()}</span></div>
               <div className="step-body">
                 <div className="grid2"><input className="input" value={dataset.input_csv} onChange={e=>setDataset({...dataset,input_csv:e.target.value})}/><input className="input" value={dataset.output_json} onChange={e=>setDataset({...dataset,output_json:e.target.value})}/></div>
@@ -2212,9 +2543,17 @@ function App(){
                   <button className="btn" onClick={()=>{setMissingOnly(false); loadLabelPreview();}}>Lấy dữ liệu</button>
                   <button className="btn" onClick={()=>{setMissingOnly(true); loadLabelPreview(1, true);}}>Xem dữ liệu thiếu nhãn</button>
                   <button className="btn dark" onClick={()=>loadByDoc(1)}>Mở workspace theo ảnh</button>
-                  <button className="btn" onClick={autoSuggestLabels}>AI gợi ý nhãn (batch 10 ảnh)</button>
+                  <button className="btn" onClick={()=>autoSuggestLabels(1)}>AI gợi ý nhãn (dòng trống)</button>
+                  <button className="btn" onClick={()=>autoSuggestLabels(0)}>AI đánh nhãn lại (ghi đè tất cả)</button>
                   <button className="btn" onClick={saveLabelUpdates}>Lưu nhãn</button>
                   <div className="tiny">Trang {labelPage}/{totalPages}. Bắt buộc: không được để rỗng cột label</div>
+                </div>
+                <div className="row" style={{gridTemplateColumns:"auto 1fr 130px auto 1fr",marginTop:8,alignItems:"center"}}>
+                  <div className="tiny" style={{fontWeight:700}}>Tách data train:</div>
+                  <input className="input" value={trainSubset.output_dir} onChange={e=>setTrainSubset({...trainSubset,output_dir:e.target.value})} placeholder="thư mục train, vd data/train_stage_b" />
+                  <input className="input" type="number" min="1" value={trainSubset.limit} onChange={e=>setTrainSubset({...trainSubset,limit:e.target.value})} placeholder="số ảnh" />
+                  <button className="btn dark" onClick={exportTrainSubset}>Tách N ảnh đủ nhãn → train</button>
+                  <div className="tiny">Chỉ lấy ảnh đã đánh đủ nhãn, dừng khi đạt số ảnh. Copy ảnh + ocr_json + csv subset sang thư mục riêng.</div>
                 </div>
                 {labelHint && <div className="tiny" style={{marginTop:6}}>{labelHint}</div>}
                 <div style={{marginTop:6}} className="tiny">
@@ -2282,7 +2621,15 @@ function App(){
                             <button className={`tab-btn ${inspectTab==="graph"?"active":""}`} onClick={()=>setInspectTab("graph")}>Xem graph train B</button>
                             <button className="btn" onClick={()=>nextMissingNode && setActiveNodeIndex(nextMissingNode.node_index)} disabled={!nextMissingNode}>Tới node thiếu nhãn</button>
                             <button className="btn" onClick={()=>nextSuspiciousNode && setActiveNodeIndex(nextSuspiciousNode.node_index)} disabled={!nextSuspiciousNode}>Tới node nghi ngờ</button>
+                            <button className="btn dark" onClick={()=>aiSuggestForDoc(false)} disabled={aiDocLoading}>{aiDocLoading?"AI đang chạy...":"AI đánh nhãn ảnh này"}</button>
                             <button className="btn" onClick={saveInspectLabels}>Lưu nhãn ảnh này</button>
+                            {saveFlash && (
+                              <span style={{
+                                marginLeft:8, padding:"6px 12px", borderRadius:8, fontWeight:700,
+                                background: saveFlash.startsWith("✅")?"#1b5e20":(saveFlash.startsWith("⚠")?"#7a5b00":"#7a1b1b"),
+                                color:"#fff", alignSelf:"center"
+                              }}>{saveFlash}</span>
+                            )}
                           </div>
                           {inspectTab==="ocr" ? (
                             <>

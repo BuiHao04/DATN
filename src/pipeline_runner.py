@@ -7,7 +7,7 @@
 # cleanly into the process, then paddle adapts.
 import torch  # noqa: F401
 import argparse
-from loguru import logger
+from loguru import logger  
 
 
 def cmd_gcn_infer(args: argparse.Namespace) -> None:

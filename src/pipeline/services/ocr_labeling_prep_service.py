@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 from loguru import logger
 
-from pipeline.core.ocr_engine import get_last_ocr_runtime_info, prepare_ocr_image, run_ocr
+from pipeline.core.ocr_engine import get_last_ocr_runtime_info, run_ocr_with_processed
 from pipeline.core.visualize import draw_boxes, draw_boxes_on_array
 
 
@@ -53,14 +53,25 @@ class OCRLabelingPrepService:
     def _clear_directory(self, directory: Path) -> None:
         if not directory.exists():
             return
-        for path in sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True):
-            if path.is_file():
-                path.unlink(missing_ok=True)
-            elif path.is_dir():
+        try:
+            paths = sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True)
+        except OSError as exc:
+            logger.warning("Could not list {} to clear it (skipping): {}", directory, exc)
+            return
+        for path in paths:
+            # Try unlink first (no stat needed) so a file we can't stat — e.g. an
+            # Errno 5 I/O error on the WSL/NTFS mount — doesn't abort the whole rerun.
+            try:
+                path.unlink()
+            except IsADirectoryError:
                 try:
                     path.rmdir()
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.warning("Skip non-removable dir while clearing {}: {}", path, exc)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning("Skip non-removable file while clearing {}: {}", path, exc)
 
     def _read_rows_csv(self, csv_path: Path) -> list[dict[str, str]]:
         if not csv_path.exists():
@@ -283,8 +294,9 @@ class OCRLabelingPrepService:
                 image_relpath = image_path.name
             logger.info("OCR [{}/{}]: {}", idx + 1, len(image_paths), image_path.name)
             try:
-                processed_image = prepare_ocr_image(str(image_path), overrides=ocr_overrides)
-                nodes = run_ocr(str(image_path), lang=lang, engine=engine, overrides=ocr_overrides)
+                nodes, processed_image = run_ocr_with_processed(
+                    str(image_path), lang=lang, engine=engine, overrides=ocr_overrides
+                )
                 ocr_runtime = get_last_ocr_runtime_info()
 
                 if copy_images:

@@ -5,6 +5,13 @@ from contextlib import contextmanager
 from functools import lru_cache
 from typing import List, Tuple
 
+# The cu118 GPU Paddle build needs cuDNN 8, but this env ships cuDNN 9 (required by
+# torch/VietOCR). cuDNN 8 is kept in a separate dir and made loadable by putting it on
+# LD_LIBRARY_PATH at process start (see _build_subprocess_env in the backend); the .so.8
+# vs .so.9 sonames let both coexist in one process. Paddle resolves cuDNN through the
+# system loader, so this dir's presence on LD_LIBRARY_PATH is what gates GPU detection.
+_CUDNN8_DIR = os.getenv("OCR_PADDLE_CUDNN8_DIR", os.path.expanduser("~/.local/lib/paddle_cudnn8"))
+
 import cv2
 import numpy as np
 import paddle
@@ -56,11 +63,45 @@ def _env_int(name: str, default: int) -> int:
 
 def _resolve_use_gpu() -> bool:
     env_force = os.getenv("OCR_USE_GPU", "").strip().lower()
-    if env_force in {"1", "true", "yes"}:
-        return True
-    if env_force in {"0", "false", "no"}:
+    if env_force in {"0", "false", "no", "off"}:
         return False
+    # Use the GPU only when the Paddle build is CUDA-capable AND its cuDNN 8 dir is on
+    # LD_LIBRARY_PATH at process start — Paddle resolves cuDNN via the system loader, so
+    # without it the first GPU op aborts the whole process (uncatchable SIGABRT). Staying
+    # on CPU here keeps the in-process single-image preview safe; the batch OCR subprocess
+    # gets the dir injected by _build_subprocess_env and runs detection on the GPU.
+    try:
+        cuda_ok = bool(paddle.is_compiled_with_cuda()) and paddle.device.cuda.device_count() > 0
+    except Exception:
+        cuda_ok = False
+    if not cuda_ok:
+        return False
+    ld_dirs = os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+    if os.path.isdir(_CUDNN8_DIR) and _CUDNN8_DIR in ld_dirs:
+        return True
+    if env_force in {"1", "true", "yes", "on"}:
+        print("[OCR] GPU requested but cuDNN 8 dir not on LD_LIBRARY_PATH; using CPU detect.")
     return False
+
+
+def _resolve_vietocr_gpu() -> bool:
+    """VietOCR (torch) GPU is decided independently of Paddle.
+
+    Paddle here is often a CPU-only build used just for detection, while the
+    slow recognition step (VietOCR/torch) benefits most from the GPU. Default
+    is auto: use CUDA whenever torch can see it.
+    """
+    env_force = os.getenv("OCR_VIETOCR_GPU", "").strip().lower()
+    if env_force in {"1", "true", "yes", "on"}:
+        return True
+    if env_force in {"0", "false", "no", "off"}:
+        return False
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
 
 
 def _resolve_ocr_engine(engine: str | None = None) -> str:
@@ -84,25 +125,28 @@ def _ocr_config_signature() -> tuple:
     )
 
 
+_OCR_OVERRIDE_ENV_MAP = {
+    "det_limit_side_len": "OCR_DET_LIMIT_SIDE_LEN",
+    "det_limit_type": "OCR_DET_LIMIT_TYPE",
+    "det_db_thresh": "OCR_DET_DB_THRESH",
+    "det_db_box_thresh": "OCR_DET_DB_BOX_THRESH",
+    "det_db_unclip_ratio": "OCR_DET_DB_UNCLIP_RATIO",
+    "use_dilation": "OCR_USE_DILATION",
+    "drop_score": "OCR_DROP_SCORE",
+    "max_batch_size": "OCR_MAX_BATCH_SIZE",
+    "show_log": "OCR_SHOW_LOG",
+    "upscale_min_side": "OCR_UPSCALE_MIN_SIDE",
+    "upscale_factor": "OCR_UPSCALE_FACTOR",
+}
+
+
 @contextmanager
 def temporary_ocr_config(overrides: dict | None = None):
     if not overrides:
         yield
         return
 
-    env_map = {
-        "det_limit_side_len": "OCR_DET_LIMIT_SIDE_LEN",
-        "det_limit_type": "OCR_DET_LIMIT_TYPE",
-        "det_db_thresh": "OCR_DET_DB_THRESH",
-        "det_db_box_thresh": "OCR_DET_DB_BOX_THRESH",
-        "det_db_unclip_ratio": "OCR_DET_DB_UNCLIP_RATIO",
-        "use_dilation": "OCR_USE_DILATION",
-        "drop_score": "OCR_DROP_SCORE",
-        "max_batch_size": "OCR_MAX_BATCH_SIZE",
-        "show_log": "OCR_SHOW_LOG",
-        "upscale_min_side": "OCR_UPSCALE_MIN_SIDE",
-        "upscale_factor": "OCR_UPSCALE_FACTOR",
-    }
+    env_map = _OCR_OVERRIDE_ENV_MAP
     previous: dict[str, str | None] = {}
     try:
         for key, value in overrides.items():
@@ -461,11 +505,12 @@ def _run_paddle_ocr(image_input, lang: str, use_gpu: bool, scale_x: float, scale
 
 def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, scale_y: float) -> List[OCRNode]:
     detector = _get_paddle_ocr(lang or "vi", use_gpu, det_only=False, _config_signature=_ocr_config_signature())
+    viet_use_gpu = _resolve_vietocr_gpu()
     predictor = None
     vietocr_available = True
     vietocr_error = ""
     try:
-        predictor = _get_vietocr_predictor(use_gpu)
+        predictor = _get_vietocr_predictor(viet_use_gpu)
     except Exception as exc:
         vietocr_available = False
         vietocr_error = str(exc)
@@ -486,38 +531,52 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
             recognizer_backend="none",
             vietocr_available=vietocr_available,
             vietocr_error=vietocr_error,
-            used_gpu=use_gpu,
+            used_gpu=viet_use_gpu,
             node_count=0,
         )
         return []
 
-    nodes: List[OCRNode] = []
+    # Pass 1: collect detected boxes + Paddle fallback text, and crop each box.
+    records: list[dict] = []
     for line in _normalize_lines(result):
         if not line or len(line) < 2:
             continue
         box = line[0]
         paddle_text = str(line[1][0]).strip() if len(line) > 1 and line[1] else ""
         paddle_score = float(line[1][1]) if len(line) > 1 and line[1] and len(line[1]) > 1 else 0.0
-        text = paddle_text
-        score = paddle_score
-        if vietocr_available and predictor is not None:
-            crop = _perspective_crop_from_box(image, box)
-            if crop is not None:
-                try:
-                    viet_text = str(predictor.predict(crop)).strip()
-                    if viet_text:
-                        text = viet_text
-                        score = 1.0
-                except Exception as exc:
-                    print(f"[OCR] VietOCR predict failed, fallback to Paddle text: {exc}")
+        crop = _perspective_crop_from_box(image, box) if (vietocr_available and predictor is not None) else None
+        records.append({"box": box, "text": paddle_text, "score": paddle_score, "crop": crop})
+
+    # Pass 2: recognize all crops in a single batched VietOCR call (GPU-friendly).
+    if vietocr_available and predictor is not None:
+        batch_imgs = [r["crop"] for r in records if r["crop"] is not None]
+        batch_pos = [i for i, r in enumerate(records) if r["crop"] is not None]
+        if batch_imgs:
+            try:
+                viet_texts, viet_probs = predictor.predict_batch(batch_imgs, return_prob=True)
+                for pos, vtext, vprob in zip(batch_pos, viet_texts, viet_probs):
+                    vtext = str(vtext).strip()
+                    if vtext:
+                        records[pos]["text"] = vtext
+                        try:
+                            records[pos]["score"] = float(vprob)
+                        except Exception:
+                            records[pos]["score"] = 1.0
+            except Exception as exc:
+                print(f"[OCR] VietOCR batch predict failed, fallback to Paddle text: {exc}")
+
+    # Pass 3: build nodes.
+    nodes: List[OCRNode] = []
+    for r in records:
+        text = r["text"]
         if not text:
             continue
-        x1, y1, x2, y2 = _box_to_rect(box, scale_x, scale_y)
-        quad = _box_to_quad(box, scale_x, scale_y)
+        x1, y1, x2, y2 = _box_to_rect(r["box"], scale_x, scale_y)
+        quad = _box_to_quad(r["box"], scale_x, scale_y)
         nodes.append(
             OCRNode(
                 text=text,
-                score=score,
+                score=r["score"],
                 x1=x1,
                 y1=y1,
                 x2=x2,
@@ -535,7 +594,7 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
         recognizer_backend="vietocr" if vietocr_available and predictor is not None else "paddle",
         vietocr_available=vietocr_available,
         vietocr_error=vietocr_error,
-        used_gpu=use_gpu,
+        used_gpu=viet_use_gpu,
         node_count=len(nodes),
     )
     return _merge_nodes_same_line(nodes)
@@ -657,33 +716,73 @@ def _merge_nodes_same_line(nodes: List[OCRNode]) -> List[OCRNode]:
     return merged
 
 
+def _dispatch_engine(
+    image_input, lang: str, use_gpu: bool, selected_engine: str, scale_x: float, scale_y: float
+) -> List[OCRNode]:
+    if selected_engine == "vietocr":
+        return _run_vietocr_hybrid(image_input, lang, use_gpu, scale_x, scale_y)
+    nodes = _run_paddle_ocr(image_input, lang, use_gpu, scale_x, scale_y)
+    _set_last_ocr_runtime_info(
+        requested_engine="paddle",
+        actual_engine="paddle",
+        recognizer_backend="paddle",
+        vietocr_available=False,
+        vietocr_error="",
+        used_gpu=use_gpu,
+        node_count=len(nodes),
+    )
+    return nodes
+
+
+def _processed_at_original_scale(image_input, scale_x: float, scale_y: float) -> np.ndarray | None:
+    if isinstance(image_input, str):
+        return cv2.imread(image_input)
+    if image_input is not None and (scale_x != 1.0 or scale_y != 1.0):
+        target_w = max(1, int(round(image_input.shape[1] / max(scale_x, 1e-6))))
+        target_h = max(1, int(round(image_input.shape[0] / max(scale_y, 1e-6))))
+        return cv2.resize(image_input, (target_w, target_h), interpolation=cv2.INTER_AREA)
+    return image_input
+
+
 def run_ocr(image_path: str, lang: str = "vi", engine: str | None = None, overrides: dict | None = None) -> List[OCRNode]:
     with temporary_ocr_config(overrides):
         use_gpu = _resolve_use_gpu()
         image_input, scale_x, scale_y = _prepare_image_for_ocr(image_path)
         selected_engine = _resolve_ocr_engine(engine)
-        if selected_engine == "vietocr":
-            return _run_vietocr_hybrid(image_input, lang, use_gpu, scale_x, scale_y)
-        nodes = _run_paddle_ocr(image_input, lang, use_gpu, scale_x, scale_y)
-        _set_last_ocr_runtime_info(
-            requested_engine="paddle",
-            actual_engine="paddle",
-            recognizer_backend="paddle",
-            vietocr_available=False,
-            vietocr_error="",
-            used_gpu=use_gpu,
-            node_count=len(nodes),
-        )
-        return nodes
+        return _dispatch_engine(image_input, lang, use_gpu, selected_engine, scale_x, scale_y)
+
+
+def run_ocr_on_prepared(
+    image_input,
+    scale_x: float,
+    scale_y: float,
+    lang: str = "vi",
+    engine: str | None = None,
+) -> Tuple[List[OCRNode], np.ndarray | None]:
+    """Detect+recognize stage on an already-normalized image. Caller must hold the OCR
+    config context (env) for the duration; used by ``run_ocr_with_processed``."""
+    use_gpu = _resolve_use_gpu()
+    selected_engine = _resolve_ocr_engine(engine)
+    nodes = _dispatch_engine(image_input, lang, use_gpu, selected_engine, scale_x, scale_y)
+    processed = _processed_at_original_scale(image_input, scale_x, scale_y)
+    return nodes, processed
+
+
+def run_ocr_with_processed(
+    image_path: str, lang: str = "vi", engine: str | None = None, overrides: dict | None = None
+) -> Tuple[List[OCRNode], np.ndarray | None]:
+    """Run OCR and return ``(nodes, processed_image)`` from a single preprocessing pass.
+
+    The batch labeling prep needs both the OCR nodes and the preprocessed image (to
+    save/draw debug boxes). Calling ``run_ocr`` and ``prepare_ocr_image`` separately
+    would run the heavy normalize/denoise pipeline twice per image; this does it once.
+    """
+    with temporary_ocr_config(overrides):
+        image_input, scale_x, scale_y = _prepare_image_for_ocr(image_path)
+        return run_ocr_on_prepared(image_input, scale_x, scale_y, lang, engine)
 
 
 def prepare_ocr_image(image_path: str, overrides: dict | None = None) -> np.ndarray | None:
     with temporary_ocr_config(overrides):
         image_input, scale_x, scale_y = _prepare_image_for_ocr(image_path)
-        if isinstance(image_input, str):
-            return cv2.imread(image_input)
-        if image_input is not None and (scale_x != 1.0 or scale_y != 1.0):
-            target_w = max(1, int(round(image_input.shape[1] / max(scale_x, 1e-6))))
-            target_h = max(1, int(round(image_input.shape[0] / max(scale_y, 1e-6))))
-            image_input = cv2.resize(image_input, (target_w, target_h), interpolation=cv2.INTER_AREA)
-        return image_input
+        return _processed_at_original_scale(image_input, scale_x, scale_y)

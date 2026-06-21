@@ -15,6 +15,7 @@ import time
 import tempfile
 import io
 from urllib import request as urllib_request
+from urllib import error as urllib_error
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,7 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 from pipeline.core.gcn_classifier import build_features
 from pipeline.core.graph_builder import build_graph_edges
-from pipeline.core.schema import OCRNode
+from pipeline.core.schema import LABEL_MAP, OCRNode
 
 FRONTEND_DIR = ROOT / "app" / "frontend" / "dist"
 FRONTEND_FALLBACK_DIR = ROOT / "app" / "frontend"
@@ -158,12 +159,14 @@ class ValidateLabelCsvRequest(BaseModel):
 
 class LabelUpdateItem(BaseModel):
     row_number: int
-    label: str
+    label: str = ""
+    text: str | None = None
 
 
 class ApplyLabelUpdatesRequest(BaseModel):
     input_csv: str
     label_col: str = "label"
+    text_col: str = "text"
     updates: list[LabelUpdateItem]
 
 
@@ -220,6 +223,28 @@ class LabelingGraphInspectRequest(BaseModel):
     y2_col: str = "y2"
     same_line_ratio: float = 1.2
     near_threshold: float = 250.0
+
+
+class LabelingSuggestDocRequest(BaseModel):
+    input_csv: str
+    doc_id: str
+    label_col: str = "label"
+    text_col: str = "text"
+    doc_id_col: str = "doc_id"
+    llm_model: str = "gpt-4.1-mini"
+    only_empty: int = 1
+    require_llm: int = 1
+    batch_size: int = 12
+
+
+class ExportTrainSubsetRequest(BaseModel):
+    input_csv: str = "data/labeling_stage_b/nodes_to_label.csv"
+    output_dir: str = "data/train_stage_b"
+    limit: int = 1000  # stop after this many fully-labeled images
+    label_col: str = "label"
+    doc_id_col: str = "doc_id"
+    copy_images: int = 1
+    copy_ocr_json: int = 1
 
 
 class SingleImagePreviewRequest(BaseModel):
@@ -779,6 +804,28 @@ def _build_subprocess_env() -> dict[str, str]:
     # resolve its own home correctly.
     env.pop("PYTHONHOME", None)
     env["PYTHONPATH"] = str(SRC_DIR)
+
+    # Linux GPU detection: the cu118 Paddle build needs cuDNN 8 plus the cu11 CUDA
+    # runtime libs on the loader path. cuDNN 8 lives in a separate dir (the env's
+    # system cuDNN is v9, required by torch); the cu11 libs sit in
+    # site-packages/nvidia/*/lib where only torch finds them via RPATH. Prepend both
+    # so the OCR subprocess can run Paddle detection on the GPU. Gated on the cuDNN 8
+    # dir existing, so machines without the GPU setup are unaffected.
+    if os.name == "posix":
+        import glob
+
+        cudnn8_dir = os.getenv(
+            "OCR_PADDLE_CUDNN8_DIR", os.path.expanduser("~/.local/lib/paddle_cudnn8")
+        )
+        if os.path.isdir(cudnn8_dir):
+            gpu_lib_dirs = [cudnn8_dir]
+            gpu_lib_dirs += glob.glob(
+                str(CONDA_ENV_DIR.parent / "lib" / "python*" / "site-packages" / "nvidia" / "*" / "lib")
+            )
+            previous = env.get("LD_LIBRARY_PATH", "")
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(
+                gpu_lib_dirs + ([previous] if previous else [])
+            )
     return env
 
 def _project_relative_path(path: Path) -> str:
@@ -1257,29 +1304,36 @@ def labeling_apply(req: ApplyLabelUpdatesRequest) -> dict[str, Any]:
     if not csv_path.exists():
         raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
 
-    updates_map = {u.row_number: u.label.strip() for u in req.updates if u.label.strip()}
-    if not updates_map:
-        return {"updated": 0, "input_csv": req.input_csv}
+    updates_map = {u.row_number: u.label.strip() for u in req.updates if u.label and u.label.strip()}
+    text_map = {u.row_number: u.text for u in req.updates if u.text is not None}
+    if not updates_map and not text_map:
+        return {"updated": 0, "text_updated": 0, "input_csv": req.input_csv}
 
     with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         fields = reader.fieldnames or []
         if req.label_col not in fields:
             raise HTTPException(status_code=400, detail=f"Missing label column: {req.label_col}")
+        if text_map and req.text_col not in fields:
+            raise HTTPException(status_code=400, detail=f"Missing text column: {req.text_col}")
         rows = list(reader)
 
     updated = 0
+    text_updated = 0
     for idx, row in enumerate(rows, start=2):
         if idx in updates_map:
             row[req.label_col] = updates_map[idx]
             updated += 1
+        if idx in text_map:
+            row[req.text_col] = text_map[idx]
+            text_updated += 1
 
     with csv_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
 
-    return {"updated": updated, "input_csv": req.input_csv}
+    return {"updated": updated, "text_updated": text_updated, "input_csv": req.input_csv}
 
 
 def _suggest_label_from_text(text: str) -> str:
@@ -1358,8 +1412,12 @@ def _extract_json_array(raw_text: str) -> list[str]:
 
 
 def _strip_accents(text: str) -> str:
+    # NFD decomposition drops most diacritics, but the Vietnamese "đ/Đ" is a distinct
+    # letter that does NOT decompose — map it to d/D explicitly so keyword matches like
+    # "don gia", "dia chi", "dvt", "dien thoai" hit text written with đ.
+    text = (text or "").replace("đ", "d").replace("Đ", "D")
     return "".join(
-        ch for ch in unicodedata.normalize("NFD", text or "") if unicodedata.category(ch) != "Mn"
+        ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn"
     )
 
 
@@ -1477,34 +1535,32 @@ def _doc_context_from_rows(
         node["is_tax_code_like"] = _tax_code_like(node["text"])
 
     line_groups = _build_line_groups(nodes)
-    summary_words = [
-        "tong cong",
-        "tong tien",
-        "thanh tien",
-        "tam tinh",
-        "subtotal",
-        "vat",
-        "thue",
-        "giam gia",
-        "discount",
-        "phi dich vu",
-        "service fee",
-        "tien khach tra",
-        "tien mat",
-        "thoi lai",
-        "can thanh toan",
-        "thanh toan",
-    ]
+    summary_re = re.compile(
+        r"\b(tong cong|tong tien|thanh tien|tam tinh|subtotal|vat|thue|gtgt|giam gia|"
+        r"discount|phi dich vu|service fee|tien khach tra|tien mat|thoi lai|"
+        r"can thanh toan|thanh toan)\b"
+    )
+    taxcode_re = re.compile(r"\b(ma so thue|mst|tax code)\b")
     item_header_words = ["ten hang", "mat hang", "sl", "so luong", "dvt", "don gia", "thanh tien", "qty", "amount"]
 
     summary_line_ids: set[int] = set()
     item_header_line_id: int | None = None
     for line_id, group in enumerate(line_groups):
         line_text = " | ".join(nodes[i]["norm_text"] for i in group if nodes[i]["norm_text"])
-        if any(word in line_text for word in summary_words):
-            summary_line_ids.add(line_id)
-        if item_header_line_id is None and sum(1 for word in item_header_words if word in line_text) >= 2:
+        # A line with >=2 column words is the item-table header (e.g. "Đơn giá | Thành
+        # tiền"). It contains "thanh tien" so it looks like a summary line — classify it
+        # as the header, not summary, or the whole item table gets read as summary.
+        is_header_line = sum(1 for word in item_header_words if word in line_text) >= 2
+        if is_header_line and item_header_line_id is None:
             item_header_line_id = line_id
+        # Word boundaries so "vat" doesn't match inside "vatio" (VAT10% on an item row);
+        # skip the tax-CODE line ("Mã số thuế") which would start the summary far too early.
+        if not is_header_line and summary_re.search(line_text) and not taxcode_re.search(line_text):
+            summary_line_ids.add(line_id)
+
+    # Summary is below the item header; drop any earlier stray hits.
+    if item_header_line_id is not None:
+        summary_line_ids = {lid for lid in summary_line_ids if lid > item_header_line_id}
 
     first_summary_line = min(summary_line_ids) if summary_line_ids else max(0, int(len(line_groups) * 0.7))
     header_boundary = item_header_line_id if item_header_line_id is not None else max(1, int(len(line_groups) * 0.25))
@@ -1566,6 +1622,23 @@ def _doc_context_from_rows(
             node["row_role_hint"] = f"item_row:{column_hint}"
         else:
             node["row_role_hint"] = "item_row"
+
+    # Money-column roles for the items region, from geometry + value shape (the item
+    # header is often merged/garbled by OCR, so column_hint alone is unreliable). The
+    # rightmost money column is the line amount; bare 1-3 digit integers are quantities;
+    # everything else is a unit price. Lets the heuristic label item-row money directly
+    # instead of leaning on the LLM (and stops a stray "VAT"/"giảm giá" token on the row
+    # from hijacking it into TAX_AMOUNT/DISCOUNT).
+    item_money_nodes = [n for n in nodes if n.get("line_region") == "items" and n.get("is_money_like")]
+    if item_money_nodes:
+        max_money_ncx = max(n["ncx"] for n in item_money_nodes)
+        for n in item_money_nodes:
+            if n["ncx"] >= max_money_ncx - 0.08:
+                n["money_col_role"] = "amount"
+            elif re.fullmatch(r"\d{1,3}", n["text"].strip()):
+                n["money_col_role"] = "qty"
+            else:
+                n["money_col_role"] = "unit_price"
 
     doc_summary = {
         "line_count": len(line_groups),
@@ -1645,23 +1718,36 @@ def _heuristic_label_for_node(node: dict[str, Any]) -> tuple[str | None, float, 
         return "INVOICE_ID", 0.88, "invoice_value_context"
 
     if node["is_money_like"]:
-        if any(x in around for x in ["giam gia", "discount"]):
-            return "DISCOUNT", 0.96, "discount_context"
-        if any(x in around for x in ["vat", "thue"]):
-            return "TAX_AMOUNT", 0.96, "tax_amount_context"
-        if any(x in around for x in ["phi dich vu", "service fee"]):
-            return "SERVICE_FEE", 0.96, "service_fee_context"
-        if any(x in around for x in ["tam tinh", "subtotal"]):
-            return "SUBTOTAL", 0.96, "subtotal_context"
-        if any(x in around for x in ["tong cong", "tong tien", "can thanh toan", "thanh toan", "tong thanh toan"]):
-            return "TOTAL_AMOUNT", 0.97, "total_context"
+        money_role = node.get("money_col_role", "")
+        # Items region: classify by column geometry FIRST so a stray "VAT"/"giảm giá"
+        # token sharing the row can't hijack a quantity / unit price / line amount.
         if region == "items":
+            # Geometry role is more reliable than column_hint: OCR often merges the whole
+            # item header into one node, so column_hint matches several columns at once.
+            if money_role == "qty":
+                return "ITEM_QTY", 0.92, "item_qty_geometry"
+            if money_role == "amount":
+                return "ITEM_AMOUNT", 0.92, "item_amount_geometry"
+            if money_role == "unit_price":
+                return "ITEM_UNIT_PRICE", 0.92, "item_unit_price_geometry"
             if any(x in column_hint for x in ["sl", "so luong", "qty"]):
-                return "ITEM_QTY", 0.93, "item_qty_column"
-            if any(x in column_hint for x in ["don gia", "price"]):
-                return "ITEM_UNIT_PRICE", 0.93, "item_unit_price_column"
+                return "ITEM_QTY", 0.9, "item_qty_column"
             if any(x in column_hint for x in ["thanh tien", "amount"]):
-                return "ITEM_AMOUNT", 0.93, "item_amount_column"
+                return "ITEM_AMOUNT", 0.9, "item_amount_column"
+            if any(x in column_hint for x in ["don gia", "dgia", "price"]):
+                return "ITEM_UNIT_PRICE", 0.9, "item_unit_price_column"
+        # Summary / keyword-based context. Word boundaries so "vat" doesn't match inside
+        # an OCR garble like "vatio" (VAT10%).
+        if re.search(r"\b(giam gia|discount)\b", around):
+            return "DISCOUNT", 0.96, "discount_context"
+        if re.search(r"\b(vat|thue|gtgt)\b", around):
+            return "TAX_AMOUNT", 0.96, "tax_amount_context"
+        if re.search(r"\b(phi dich vu|service fee)\b", around):
+            return "SERVICE_FEE", 0.96, "service_fee_context"
+        if re.search(r"\b(tam tinh|subtotal)\b", around):
+            return "SUBTOTAL", 0.96, "subtotal_context"
+        if re.search(r"\b(tong cong|tong tien|can thanh toan|thanh toan|tong thanh toan)\b", around):
+            return "TOTAL_AMOUNT", 0.97, "total_context"
         if region == "summary":
             return "TOTAL_AMOUNT", 0.65, "summary_money_fallback"
 
@@ -1690,6 +1776,15 @@ def _heuristic_label_for_node(node: dict[str, Any]) -> tuple[str | None, float, 
 
 def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[str, Any]]) -> dict[str, Any]:
     row_to_node = {n["row_number"]: n for n in nodes}
+
+    def _shown_heuristic(n: dict[str, Any]) -> tuple[str | None, float, str]:
+        # Only surface heuristic guidance the LLM should actually trust.
+        # Weak fallbacks (e.g. item_alpha_fallback -> ITEM_NAME at 0.62) bias
+        # the model toward ITEM_NAME, so hide them and let the LLM decide fresh.
+        conf = float(n.get("heuristic_confidence", 0.0) or 0.0)
+        if conf >= 0.75:
+            return n.get("heuristic_label"), round(conf, 4), n.get("heuristic_reason", "")
+        return None, round(conf, 4), ""
     line_to_nodes: dict[int, list[dict[str, Any]]] = {}
     for node in nodes:
         line_id = int(node.get("line_id", -1))
@@ -1698,15 +1793,16 @@ def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[
         line_nodes.sort(key=lambda x: x.get("line_pos", 0))
 
     def _compact_node(n: dict[str, Any]) -> dict[str, Any]:
+        h_label, h_conf, h_reason = _shown_heuristic(n)
         return {
             "row_number": n["row_number"],
             "text": n["text"],
             "region": n.get("line_region"),
             "column_hint": n.get("column_hint", ""),
             "bbox_norm": [n["nx1"], n["ny1"], n["nx2"], n["ny2"]],
-            "heuristic_label": n.get("heuristic_label"),
-            "heuristic_confidence": round(float(n.get("heuristic_confidence", 0.0)), 4),
-            "heuristic_reason": n.get("heuristic_reason", ""),
+            "heuristic_label": h_label,
+            "heuristic_confidence": h_conf,
+            "heuristic_reason": h_reason,
             "current_label": n.get("label", ""),
         }
 
@@ -1726,6 +1822,7 @@ def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[
             if not txt:
                 continue
             vertical_neighbors.append({"direction": key.replace("_text", ""), "text": txt})
+        h_label, h_conf, h_reason = _shown_heuristic(n)
         return {
             "target": {
                 "row_number": n["row_number"],
@@ -1736,9 +1833,9 @@ def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[
                 "row_role_hint": n.get("row_role_hint"),
                 "column_hint": n.get("column_hint", ""),
                 "ocr_score": n.get("score", 1.0),
-                "heuristic_label": n.get("heuristic_label"),
-                "heuristic_confidence": round(float(n.get("heuristic_confidence", 0.0)), 4),
-                "heuristic_reason": n.get("heuristic_reason", ""),
+                "heuristic_label": h_label,
+                "heuristic_confidence": h_conf,
+                "heuristic_reason": h_reason,
                 "current_label": n.get("label", ""),
                 "is_money_like": n.get("is_money_like"),
                 "is_date_like": n.get("is_date_like"),
@@ -1765,9 +1862,9 @@ def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[
             "column_hint": n.get("column_hint", ""),
             "bbox_norm": [n["nx1"], n["ny1"], n["nx2"], n["ny2"]],
             "current_label": n.get("label", ""),
-            "heuristic_label": n.get("heuristic_label"),
-            "heuristic_confidence": n.get("heuristic_confidence", 0.0),
-            "heuristic_reason": n.get("heuristic_reason", ""),
+            "heuristic_label": _shown_heuristic(n)[0],
+            "heuristic_confidence": _shown_heuristic(n)[1],
+            "heuristic_reason": _shown_heuristic(n)[2],
         }
         for n in nodes
     ]
@@ -1791,9 +1888,9 @@ def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[
             "is_phone_like": n.get("is_phone_like"),
             "is_tax_code_like": n.get("is_tax_code_like"),
             "ocr_score": n.get("score", 1.0),
-            "heuristic_label": n.get("heuristic_label"),
-            "heuristic_confidence": n.get("heuristic_confidence", 0.0),
-            "heuristic_reason": n.get("heuristic_reason", ""),
+            "heuristic_label": _shown_heuristic(n)[0],
+            "heuristic_confidence": _shown_heuristic(n)[1],
+            "heuristic_reason": _shown_heuristic(n)[2],
         }
         for n in target_nodes
     ]
@@ -1801,18 +1898,18 @@ def _build_doc_llm_payload(nodes: list[dict[str, Any]], target_nodes: list[dict[
         {
             "row_number": n["row_number"],
             "text": n["text"],
-            "heuristic_label": n.get("heuristic_label"),
-            "heuristic_confidence": n.get("heuristic_confidence", 0.0),
+            "heuristic_label": _shown_heuristic(n)[0],
+            "heuristic_confidence": _shown_heuristic(n)[1],
             "region": n.get("line_region"),
             "column_hint": n.get("column_hint", ""),
         }
         for n in nodes
-        if n.get("heuristic_label")
+        if _shown_heuristic(n)[0]
     ]
     focus_contexts = [_target_context(n) for n in target_nodes]
     seeded_by_label: dict[str, list[dict[str, Any]]] = {}
     for n in nodes:
-        label = str(n.get("heuristic_label") or "").strip()
+        label = str(_shown_heuristic(n)[0] or "").strip()
         if not label:
             continue
         seeded_by_label.setdefault(label, [])
@@ -1840,11 +1937,16 @@ def _llm_suggest_labels_for_doc(
     if not api_key:
         raise RuntimeError("Missing OPENAI_API_KEY")
 
+    # Canonical numeric ids (same numbering as training, see schema.LABEL_MAP).
+    # The model answers with the integer id instead of the long label name to
+    # cut output tokens; we map ids back to label strings after the call.
+    label_ids = {str(lid): name for lid, name in LABEL_MAP.items() if name in labels}
+
     prompt = {
         "task": "Classify OCR nodes from one Vietnamese invoice/receipt using document structure, neighboring texts, line grouping, and node position.",
-        "labels": labels,
+        "label_ids": label_ids,
         "rules": [
-            "Return exactly one label per target node.",
+            "Return exactly one label id (integer) per target node, taken from label_ids.",
             "Use node position, same-line texts, left/right/top/bottom neighbors, and document region.",
             "You will also receive heuristic labels already assigned to many nodes in the same document.",
             "Treat high-confidence heuristic labels on nearby nodes as strong context for classifying target nodes.",
@@ -1856,7 +1958,7 @@ def _llm_suggest_labels_for_doc(
             "If a money value is in item rows near quantity/unit price/amount columns, prefer ITEM_QTY / ITEM_UNIT_PRICE / ITEM_AMOUNT.",
             "If a money value is in summary area near Tong cong / Tam tinh / VAT / Giam gia / Thanh toan, prefer the corresponding summary label.",
             "Merchant info usually appears near the top; payment method and final totals usually appear near the bottom.",
-            "Short product modifiers such as (V?a), (L?n), n?ng, l?nh, ?t ??, ?t ???ng are usually OTHER, not ITEM_NAME.",
+            "Short product modifiers such as (Vừa), (Lớn), nóng, lạnh, ít đá, ít đường are usually OTHER, not ITEM_NAME.",
             "Customer lines, notes, and mixed administrative lines containing time + invoice id + other header metadata should usually be OTHER unless one field is clearly isolated.",
             "Address labels should be used only for store address-like text, usually in header region with street/district/city patterns or explicit address keywords.",
             "Do not label table headers such as Ten mon, SL, D.Gia, T.Tien as ITEM_NAME; these are structure/header nodes and should be OTHER.",
@@ -1976,8 +2078,9 @@ def _llm_suggest_labels_for_doc(
             {
                 "role": "user",
                 "content": (
-                    "Return JSON object only with this schema: "
-                    "{\"labels\": [{\"row_number\": 12, \"label\": \"TOTAL_AMOUNT\"}, ...]}"
+                    "Return JSON object only with this schema, where label is the integer "
+                    "id from label_ids (NOT the name): "
+                    "{\"labels\": [{\"row_number\": 12, \"label\": 17}, ...]}"
                 ),
             },
         ],
@@ -1992,8 +2095,49 @@ def _llm_suggest_labels_for_doc(
         },
         method="POST",
     )
-    with urllib_request.urlopen(req, timeout=90) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    max_attempts = 5
+    payload = None
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            with urllib_request.urlopen(req, timeout=90) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            break
+        except urllib_error.HTTPError as exc:
+            detail = ""
+            err_code = ""
+            try:
+                err_body = json.loads(exc.read().decode("utf-8"))
+                err_obj = err_body.get("error", {})
+                detail = str(err_obj.get("message") or "")
+                err_code = str(err_obj.get("code") or "")
+            except Exception:
+                detail = ""
+            # Hard quota errors are not worth retrying.
+            if exc.code == 429 and err_code == "insufficient_quota":
+                raise RuntimeError(f"OpenAI HTTP 429 insufficient_quota: {detail or exc.reason}") from exc
+            # Retry on rate limit (429) and transient server errors (5xx).
+            if exc.code == 429 or 500 <= exc.code < 600:
+                last_error = RuntimeError(f"OpenAI HTTP {exc.code}: {detail or exc.reason}")
+                if attempt < max_attempts - 1:
+                    retry_after = 0.0
+                    try:
+                        retry_after = float(exc.headers.get("Retry-After", "") or 0)
+                    except Exception:
+                        retry_after = 0.0
+                    backoff = retry_after if retry_after > 0 else (2.0 ** attempt)
+                    time.sleep(min(30.0, backoff) + random.uniform(0, 0.5))
+                    continue
+                raise last_error from exc
+            raise RuntimeError(f"OpenAI HTTP {exc.code}: {detail or exc.reason}") from exc
+        except (urllib_error.URLError, TimeoutError) as exc:
+            last_error = RuntimeError(f"OpenAI request failed: {exc}")
+            if attempt < max_attempts - 1:
+                time.sleep(min(30.0, 2.0 ** attempt) + random.uniform(0, 0.5))
+                continue
+            raise last_error from exc
+    if payload is None:
+        raise last_error or RuntimeError("OpenAI request failed without response")
     content = payload["choices"][0]["message"]["content"]
     obj = json.loads(content)
     arr = obj.get("labels", [])
@@ -2007,7 +2151,14 @@ def _llm_suggest_labels_for_doc(
             row_number = int(item.get("row_number"))
         except Exception:
             continue
-        label = str(item.get("label", "")).strip().upper()
+        raw = str(item.get("label", "")).strip()
+        # Preferred path: model returns the numeric id -> map back to the label
+        # string here so the CSV stays human-readable. Fall back to name parsing
+        # for backward compatibility if the model still answers with a name.
+        if raw.lstrip("-").isdigit():
+            label = LABEL_MAP.get(int(raw), "OTHER")
+        else:
+            label = raw.upper()
         if label not in labels:
             label = "OTHER"
         out[row_number] = label
@@ -2052,6 +2203,7 @@ def _suggest_labels_for_document(
     strategy_used = "heuristic"
     llm_batches = 0
     llm_errors: list[str] = []
+    llm_unlabeled = 0  # nodes left blank because the LLM failed/omitted them
     if llm_targets and use_llm:
         strategy_used = "llm+heuristic"
         for s in range(0, len(llm_targets), max_targets_per_request):
@@ -2067,16 +2219,20 @@ def _suggest_labels_for_document(
                 )
                 llm_batches += 1
                 for node in chunk:
-                    assigned[node["row_number"]] = llm_map.get(
-                        node["row_number"],
-                        _suggest_label_from_text(node["text"]),
-                    )
+                    # Only accept labels the LLM actually returned. If it omitted a
+                    # node, leave it blank for a later pass instead of guessing with
+                    # the rule fallback (which biases everything to ITEM_NAME).
+                    if node["row_number"] in llm_map:
+                        assigned[node["row_number"]] = llm_map[node["row_number"]]
+                    else:
+                        llm_unlabeled += 1
             except Exception as exc:
+                # LLM failed (rate limit / quota / network). Do NOT write rule
+                # fallback labels — that is exactly what corrupted the dataset
+                # before. Leave these rows blank so they can be retried.
                 llm_errors.append(str(exc))
-                strategy_used = "heuristic+rule_fallback"
-                for node in chunk:
-                    fallback = node.get("heuristic_label") or _suggest_label_from_text(node["text"])
-                    assigned[node["row_number"]] = fallback
+                strategy_used = "llm_error_skipped"
+                llm_unlabeled += len(chunk)
     else:
         for node in llm_targets:
             assigned[node["row_number"]] = node.get("heuristic_label") or _suggest_label_from_text(node["text"])
@@ -2089,6 +2245,7 @@ def _suggest_labels_for_document(
         "heuristic_hits": heuristic_hits,
         "llm_targets": len(llm_targets),
         "llm_batches": llm_batches,
+        "llm_unlabeled": llm_unlabeled,
         "strategy_used": strategy_used,
         "llm_errors": llm_errors,
         "doc_summary": doc_summary,
@@ -2130,14 +2287,23 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
     label_col = args.get("label_col", "label")
     text_col = args.get("text_col", "text")
     doc_id_col = args.get("doc_id_col", "doc_id")
-    # Do not overwrite labels that already exist. This keeps reruns incremental.
-    only_empty = True
+    # only_empty=1 (default): keep existing labels, only fill blanks (incremental rerun).
+    # only_empty=0: force re-label every node, overwriting existing labels.
+    only_empty = bool(int(args.get("only_empty", 1)))
     llm_model = args.get("llm_model", "gpt-4.1-mini")
     batch_docs = max(1, min(int(args.get("batch_docs", 10)), 50))
     llm_text_batch_size = max(1, min(int(args.get("llm_text_batch_size", 10)), 50))
     require_llm = int(args.get("require_llm", 1)) == 1
 
     try:
+        if require_llm and not os.getenv("OPENAI_API_KEY", "").strip():
+            # Fail loudly instead of silently degrading to the rule fallback,
+            # which blindly labels most alphabetic text as ITEM_NAME.
+            raise RuntimeError(
+                "Missing OPENAI_API_KEY. LLM labeling is enabled (require_llm=1) but no API key is configured. "
+                "Add OPENAI_API_KEY to DATN/.env and restart the backend, or disable LLM (require_llm=0)."
+            )
+
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
             fields = reader.fieldnames or []
@@ -2193,7 +2359,8 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
                         rows[ridx][label_col] = assigned[row_number]
                 logs.append(
                     f"doc={did} rows={len(doc_row_indices)} heuristic={stats['heuristic_hits']} "
-                    f"llm_targets={stats['llm_targets']} llm_batches={stats['llm_batches']} mode={stats['strategy_used']}"
+                    f"llm_targets={stats['llm_targets']} llm_batches={stats['llm_batches']} "
+                    f"unlabeled={stats.get('llm_unlabeled', 0)} mode={stats['strategy_used']}"
                 )
                 if stats["llm_errors"]:
                     logs.append(f"doc={did} llm_error={stats['llm_errors'][-1]}")
@@ -2579,6 +2746,202 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
     }
 
 
+@app.post("/api/pipeline/labeling-suggest-doc")
+def labeling_suggest_doc(req: LabelingSuggestDocRequest) -> dict[str, Any]:
+    """AI-suggest labels for the nodes of a single image (doc_id).
+
+    Returns suggestions only (does not write). The frontend fills them into the
+    review view and persists via /api/pipeline/labeling-apply so the user can
+    still adjust before saving.
+    """
+    if req.require_llm:
+        _ensure_openai_api_key()
+
+    csv_path = SRC_DIR / req.input_csv
+    if not csv_path.exists():
+        raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        fields = reader.fieldnames or []
+        for col in (req.label_col, req.text_col, req.doc_id_col):
+            if col not in fields:
+                raise HTTPException(status_code=400, detail=f"Missing column: {col}")
+        rows = list(reader)
+
+    target_doc = req.doc_id.strip()
+    doc_row_indices = [
+        i for i, row in enumerate(rows)
+        if str(row.get(req.doc_id_col, "") or "").strip() == target_doc
+    ]
+    if not doc_row_indices:
+        raise HTTPException(status_code=404, detail=f"No rows for doc_id: {req.doc_id}")
+
+    if req.only_empty:
+        wanted = {
+            i + 2 for i in doc_row_indices
+            if not str(rows[i].get(req.label_col, "") or "").strip()
+        }
+    else:
+        wanted = {i + 2 for i in doc_row_indices}
+
+    if not wanted:
+        return {
+            "doc_id": target_doc,
+            "input_csv": req.input_csv,
+            "suggestions": [],
+            "node_count": len(doc_row_indices),
+            "only_empty": bool(req.only_empty),
+            "stats": {"strategy_used": "none", "note": "no_target_rows"},
+        }
+
+    # Use the full document as context, then keep only the requested rows.
+    assigned, stats = _suggest_labels_for_document(
+        rows,
+        doc_row_indices,
+        text_col=req.text_col,
+        label_col=req.label_col,
+        llm_model=req.llm_model,
+        use_llm=bool(req.require_llm),
+        max_targets_per_request=max(1, min(int(req.batch_size), 50)),
+    )
+
+    text_by_row = {i + 2: str(rows[i].get(req.text_col, "") or "") for i in doc_row_indices}
+    suggestions = [
+        {"row_number": rn, "label": label, "text": text_by_row.get(rn, "")}
+        for rn, label in sorted(assigned.items())
+        if rn in wanted
+    ]
+
+    return {
+        "doc_id": target_doc,
+        "input_csv": req.input_csv,
+        "suggestions": suggestions,
+        "node_count": len(doc_row_indices),
+        "suggested_count": len(suggestions),
+        "only_empty": bool(req.only_empty),
+        "llm_model": req.llm_model if "llm" in stats.get("strategy_used", "") else None,
+        "labels": INVOICE_LABELS,
+        "stats": {
+            "strategy_used": stats.get("strategy_used"),
+            "heuristic_hits": stats.get("heuristic_hits"),
+            "llm_targets": stats.get("llm_targets"),
+            "llm_batches": stats.get("llm_batches"),
+            "llm_unlabeled": stats.get("llm_unlabeled", 0),
+            "llm_errors": stats.get("llm_errors", []),
+        },
+    }
+
+
+@app.post("/api/pipeline/export-train-subset")
+def export_train_subset(req: ExportTrainSubsetRequest) -> dict[str, Any]:
+    """Copy the first N fully-labeled images into a separate training folder.
+
+    A doc/image counts toward the cap only when EVERY one of its OCR nodes has a
+    non-empty label. Docs are scanned in CSV order; once `limit` fully-labeled
+    images are collected the export stops. The selected rows are written to
+    <output_dir>/nodes_to_label.csv and (optionally) their images + ocr_json are
+    copied alongside, so training reads from this clean subset only.
+    """
+    csv_path = SRC_DIR / req.input_csv
+    if not csv_path.exists():
+        raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
+    if req.limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+
+    src_root = csv_path.parent
+    src_images = src_root / "images"
+    src_ocr_json = src_root / "ocr_json"
+
+    out_root = SRC_DIR / req.output_dir
+    out_images = out_root / "images"
+    out_ocr_json = out_root / "ocr_json"
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        fields = reader.fieldnames or []
+        for col in (req.label_col, req.doc_id_col):
+            if col not in fields:
+                raise HTTPException(status_code=400, detail=f"Missing column: {col}")
+        all_rows = list(reader)
+
+    # Group rows by doc_id, preserving first-seen order.
+    doc_order: list[str] = []
+    doc_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in all_rows:
+        did = str(row.get(req.doc_id_col, "") or "").strip() or "UNKNOWN_DOC"
+        if did not in doc_rows:
+            doc_rows[did] = []
+            doc_order.append(did)
+        doc_rows[did].append(row)
+
+    total_docs = len(doc_order)
+    selected_docs: list[str] = []
+    for did in doc_order:
+        rows = doc_rows[did]
+        if all(str(r.get(req.label_col, "") or "").strip() for r in rows):
+            selected_docs.append(did)
+            if len(selected_docs) >= req.limit:
+                break
+
+    reached_limit = len(selected_docs) >= req.limit
+
+    out_root.mkdir(parents=True, exist_ok=True)
+    selected_rows = [r for did in selected_docs for r in doc_rows[did]]
+
+    # Write the subset CSV.
+    out_csv = out_root / "nodes_to_label.csv"
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", newline="", dir=str(out_root), delete=False, suffix=".tmp"
+    ) as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(selected_rows)
+        tmp_path = Path(f.name)
+    tmp_path.replace(out_csv)
+
+    copied_images = 0
+    missing_images: list[str] = []
+    copied_json = 0
+    missing_json: list[str] = []
+    for did in selected_docs:
+        if int(req.copy_images):
+            relpath = str(doc_rows[did][0].get("image_relpath", "") or "").strip()
+            if relpath:
+                src_img = src_images / relpath
+                if src_img.exists():
+                    dst_img = out_images / relpath
+                    dst_img.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_img, dst_img)
+                    copied_images += 1
+                else:
+                    missing_images.append(relpath)
+        if int(req.copy_ocr_json):
+            src_j = src_ocr_json / f"{did}.json"
+            if src_j.exists():
+                out_ocr_json.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_j, out_ocr_json / f"{did}.json")
+                copied_json += 1
+            else:
+                missing_json.append(did)
+
+    return {
+        "input_csv": req.input_csv,
+        "output_dir": str(out_root.relative_to(SRC_DIR)) if out_root.is_relative_to(SRC_DIR) else str(out_root),
+        "subset_csv": str(out_csv.relative_to(SRC_DIR)) if out_csv.is_relative_to(SRC_DIR) else str(out_csv),
+        "total_docs": total_docs,
+        "fully_labeled_available": "unknown_capped" if reached_limit else len(selected_docs),
+        "exported_docs": len(selected_docs),
+        "exported_rows": len(selected_rows),
+        "limit": req.limit,
+        "reached_limit": reached_limit,
+        "copied_images": copied_images,
+        "missing_images_count": len(missing_images),
+        "copied_ocr_json": copied_json,
+        "missing_ocr_json_count": len(missing_json),
+    }
+
+
 @app.post("/api/pipeline/single-image-preview")
 def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
     from pipeline.core.ocr_engine import get_last_ocr_runtime_info
@@ -2776,6 +3139,120 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
         "extracted_fields": extracted_fields,
         "ai_stats": ai_stats,
         "nodes": node_items,
+    }
+
+
+@app.get("/api/pipeline/labeling-gallery")
+def labeling_gallery(
+    dir: str = "data/labeling_top1000",
+    page: int = 1,
+    page_size: int = 60,
+    sort: str = "score_desc",
+    label_csv: str = "",
+    label_col: str = "label",
+    doc_id_col: str = "doc_id",
+) -> dict[str, Any]:
+    """List images in an OCR labeling folder so the UI can show a quality gallery.
+
+    Reads each image's OCR JSON to compute num_nodes + mean recognition score,
+    sorts (sort = score_desc|score_asc|nodes_desc|nodes_asc) and paginates.
+    Returns project-relative paths usable by /api/files/image (processed image +
+    OCR debug-box overlay when available).
+
+    When ``label_csv`` is given, cross-references that CSV to report, per image,
+    how many rows already carry a non-empty label (``num_labeled`` / ``num_rows``)
+    so the UI can highlight images that have been labeled already.
+    """
+    base = _resolve_project_path(dir)
+    ocr_json_dir = base / "ocr_json"
+    if not ocr_json_dir.exists():
+        raise HTTPException(status_code=404, detail=f"No ocr_json folder in {dir}")
+
+    # doc_id -> [total rows, labeled rows] from the labeling CSV (if provided).
+    label_counts: dict[str, list[int]] = {}
+    if label_csv:
+        csv_path = SRC_DIR / label_csv
+        if csv_path.exists():
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                fields = reader.fieldnames or []
+                if doc_id_col in fields and label_col in fields:
+                    for row in reader:
+                        did = str(row.get(doc_id_col, "")).strip()
+                        if not did:
+                            continue
+                        entry = label_counts.setdefault(did, [0, 0])
+                        entry[0] += 1
+                        if str(row.get(label_col, "")).strip():
+                            entry[1] += 1
+
+    metas: list[dict[str, Any]] = []
+    for jp in ocr_json_dir.glob("*.json"):
+        try:
+            payload = json.loads(jp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        nodes = payload.get("nodes", []) or []
+        scores = [float(n.get("score", 0.0)) for n in nodes]
+        metas.append(
+            {
+                "doc_id": str(payload.get("doc_id", jp.stem)),
+                "image_relpath": str(payload.get("image_relpath", "")),
+                "num_nodes": len(nodes),
+                "mean_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+            }
+        )
+
+    sort_key = "num_nodes" if "node" in sort else "mean_score"
+    metas.sort(key=lambda m: m[sort_key], reverse=not sort.endswith("asc"))
+
+    total = len(metas)
+    page = max(1, int(page))
+    page_size = max(1, min(int(page_size), 200))
+    start = (page - 1) * page_size
+    chunk = metas[start : start + page_size]
+
+    def _rel(p: Path) -> str:
+        for root in (SRC_DIR, ROOT):
+            try:
+                return str(p.relative_to(root)).replace("\\", "/")
+            except ValueError:
+                continue
+        return str(p).replace("\\", "/")
+
+    base_rel = _rel(base)
+    stage_b_debug = SRC_DIR / "data" / "labeling_stage_b" / "debug_boxes"
+    items: list[dict[str, Any]] = []
+    for m in chunk:
+        relpath = m["image_relpath"]
+        image_path = f"{base_rel}/images/{relpath}" if relpath else ""
+        debug_path = ""
+        for cand in (
+            base / "debug_boxes" / f"{m['doc_id']}_boxes.jpg",
+            stage_b_debug / f"{m['doc_id']}_boxes.jpg",
+        ):
+            if cand.exists():
+                debug_path = _rel(cand)
+                break
+        counts = label_counts.get(m["doc_id"])
+        num_rows = counts[0] if counts else 0
+        num_labeled = counts[1] if counts else 0
+        items.append({
+            **m,
+            "image_path": image_path,
+            "debug_path": debug_path,
+            "num_rows": num_rows,
+            "num_labeled": num_labeled,
+        })
+
+    return {
+        "dir": dir,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0,
+        "sort": sort,
+        "items": items,
     }
 
 

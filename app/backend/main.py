@@ -2294,6 +2294,7 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
     batch_docs = max(1, min(int(args.get("batch_docs", 10)), 50))
     llm_text_batch_size = max(1, min(int(args.get("llm_text_batch_size", 10)), 50))
     require_llm = int(args.get("require_llm", 1)) == 1
+    stop_flag = _job_stop_flag_path(job_id)
 
     try:
         if require_llm and not os.getenv("OPENAI_API_KEY", "").strip():
@@ -2375,6 +2376,8 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
             jobs = _load_jobs()
             for j in jobs:
                 if j["id"] == job_id:
+                    if stop_flag.exists() and j.get("status") in {"queued", "running"}:
+                        j["status"] = "stopping"
                     j["progress"] = {
                         "current_docs": done_docs,
                         "total_docs": total_docs,
@@ -2384,14 +2387,19 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
                     j["stdout"] = "\n".join(logs[-120:])
             _save_jobs(jobs)
 
+            if stop_flag.exists():
+                logs.append("Da nhan yeu cau dung. Job se dung an toan sau batch vua luu.")
+                break
+
         _write_csv_rows(csv_path, fields, rows)
 
         jobs = _load_jobs()
         for j in jobs:
             if j["id"] == job_id:
-                j["status"] = "success"
+                stopped = stop_flag.exists() or bool(j.get("stop_requested"))
+                j["status"] = "stopped" if stopped else "success"
                 j["return_code"] = 0
-                j["stdout"] = "\n".join(logs[-200:] + ["Hoan tat AI goi y nhan."])
+                j["stdout"] = "\n".join(logs[-200:] + (["Da dung AI goi y nhan an toan."] if stopped else ["Hoan tat AI goi y nhan."]))
                 j["stderr"] = ""
                 j["finished_at"] = datetime.utcnow().isoformat()
         _save_jobs(jobs)
@@ -2404,6 +2412,9 @@ def _run_labeling_auto_job(job_id: str, args: dict[str, Any]) -> None:
                 j["stderr"] = str(exc)
                 j["finished_at"] = datetime.utcnow().isoformat()
         _save_jobs(jobs)
+    finally:
+        if stop_flag.exists():
+            stop_flag.unlink()
 
 
 @app.post("/api/pipeline/labeling-auto-suggest")

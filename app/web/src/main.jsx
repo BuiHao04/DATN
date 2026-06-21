@@ -738,6 +738,91 @@ function App(){
         : `Đã tạo job AI gợi ý nhãn cho các dòng còn trống: ${d.id}. Job sẽ lưu sau từng batch và bấm chạy tiếp sẽ không gán lại phần đã xong.`);
     }
   };
+  const autoSuggestGalleryBatch=async(onlyEmpty=1)=>{
+    const csvPath=galleryCsv();
+    if(onlyEmpty===0 && !window.confirm(`AI sẽ đánh nhãn lại toàn bộ file ${csvPath} và có thể GHI ĐÈ nhãn đang có trong top ảnh này. Tiếp tục?`)) return;
+    const d=await apiPost("/api/pipeline/labeling-auto-suggest-start",{
+      input_csv:csvPath,
+      label_col:"label",
+      text_col:"text",
+      doc_id_col:"doc_id",
+      only_empty:onlyEmpty,
+      llm_model:"gpt-4.1-mini",
+      batch_docs:10,
+      llm_text_batch_size:10,
+      require_llm:1
+    });
+    if(d?.id){
+      setLabelHint(onlyEmpty===0
+        ? `Đã tạo job AI đánh nhãn LẠI cho gallery ${csvPath}: ${d.id}.`
+        : `Đã tạo job AI gợi ý nhãn cho các dòng còn trống trong gallery ${csvPath}: ${d.id}. Job sẽ lưu sau từng batch 10 ảnh.`);
+      setOutSummary("gallery_auto_suggest_start",{
+        id:d.id,
+        input_csv:csvPath,
+        only_empty:onlyEmpty,
+        batch_docs:10,
+        llm_text_batch_size:10
+      });
+    }
+  };
+  const galleryBaseDir=()=>String(galleryDir||"data/labeling_top1000").replace(/[\\/]+$/,"");
+  const galleryGraphJson=()=>`${galleryBaseDir()}/stage_b_vi_dataset.json`;
+  const galleryTrainJson=()=>`${galleryBaseDir()}/stage_b_train.json`;
+  const galleryValJson=()=>`${galleryBaseDir()}/stage_b_val.json`;
+  const galleryTestJson=()=>`${galleryBaseDir()}/stage_b_test.json`;
+  const applyGalleryOutputsToForms=(graphPath, outputs=null)=>{
+    setDataset(prev=>({...prev,input_csv:galleryCsv(),output_json:graphPath || prev.output_json}));
+    setTrainB(prev=>({
+      ...prev,
+      dataset_json: outputs?.train?.path || graphPath || prev.dataset_json,
+      val_dataset_json: outputs?.validation?.path || prev.val_dataset_json,
+    }));
+    setTrainFull(prev=>({
+      ...prev,
+      stage_b_json: outputs?.train?.path || graphPath || prev.stage_b_json,
+      eval_json: outputs?.test?.path || prev.eval_json,
+    }));
+    setStageBEval(prev=>({
+      ...prev,
+      dataset_json: outputs?.test?.path || prev.dataset_json,
+    }));
+  };
+  const compileGalleryDataset=async(splitAfter=false)=>{
+    const csvPath=galleryCsv();
+    const graphPath=galleryGraphJson();
+    const v=await apiPost("/api/pipeline/validate-label-csv",{input_csv:csvPath,label_col:"label"});
+    if(!v?.ok){
+      setOut(JSON.stringify({status:"blocked",reason:"CSV top ảnh còn label rỗng, cần gán nhãn trước khi compile",validate:v},null,2));
+      setLabelHint(`Chưa compile được top ảnh vì còn ${v?.empty_label_count ?? "?"} dòng thiếu nhãn.`);
+      return;
+    }
+    const d=await apiPost("/api/pipeline/preprocess-gcn-dataset",{input_csv:csvPath,output_json:graphPath});
+    if(d){
+      setLabelHint(`Đã compile dataset graph từ top ảnh: ${graphPath}.`);
+      setOutSummary("gallery_preprocess_gcn_dataset",{input_csv:csvPath,output_json:graphPath});
+      applyGalleryOutputsToForms(graphPath, null);
+      await loadTrainFileOptions();
+    }
+    if(splitAfter){
+      const sd=await apiPost("/api/pipeline/split-gcn-dataset",{
+        input_json:graphPath,
+        output_train_json:galleryTrainJson(),
+        output_val_json:galleryValJson(),
+        output_test_json:galleryTestJson(),
+        train_ratio:splitStageB.train_ratio,
+        val_ratio:splitStageB.val_ratio,
+        test_ratio:splitStageB.test_ratio,
+        seed:splitStageB.seed,
+      });
+      if(sd?.outputs){
+        setSplitResult(sd);
+        applyGalleryOutputsToForms(graphPath, sd.outputs);
+        setLabelHint(`Đã compile + tách top ảnh: train=${sd.outputs.train.graphs}, val=${sd.outputs.validation.graphs}, test=${sd.outputs.test.graphs}.`);
+        setOutSummary("gallery_split_gcn_dataset",sd);
+        await loadTrainFileOptions();
+      }
+    }
+  };
   const exportTrainSubset=async()=>{
     const d=await apiPost("/api/pipeline/export-train-subset",{
       input_csv:dataset.input_csv,
@@ -2422,7 +2507,7 @@ function App(){
               <div className="step-head"><h3>Xem nhanh chất lượng ảnh đã chọn (top 1000)</h3><span className="badge idle">{galleryTotal?`${galleryTotal} ẢNH`:"GALLERY"}</span></div>
               <div className="step-body">
                 <div className="p">Xem trực tiếp các ảnh OCR tốt nhất đã chọn để tự đánh giá chất lượng trước khi gán nhãn. Sắp theo điểm OCR trung bình hoặc số node.</div>
-                <div className="row" style={{gridTemplateColumns:"1fr 150px 110px 90px auto auto auto",marginTop:8,alignItems:"center"}}>
+                <div className="row" style={{gridTemplateColumns:"1fr 170px 110px 110px auto auto auto auto auto",marginTop:8,alignItems:"center"}}>
                   <input className="input" value={galleryDir} onChange={e=>setGalleryDir(e.target.value)} placeholder="thư mục, vd data/labeling_top1000" />
                   <select className="input" value={gallerySort} onChange={e=>setGallerySort(e.target.value)}>
                     <option value="score_desc">Điểm OCR cao → thấp</option>
@@ -2433,8 +2518,15 @@ function App(){
                   <input className="input" type="number" min="12" max="200" value={galleryPageSize} onChange={e=>setGalleryPageSize(e.target.value)} title="số ảnh mỗi trang" />
                   <label className="tiny" style={{display:"flex",alignItems:"center",gap:6}}><input type="checkbox" checked={galleryShowBoxes} onChange={e=>setGalleryShowBoxes(e.target.checked)} />Hiện box OCR</label>
                   <button className="btn dark" onClick={()=>loadGallery(1)} disabled={galleryLoading}>{galleryLoading?"Đang tải...":"Xem ảnh"}</button>
+                  <button className="btn" onClick={()=>autoSuggestGalleryBatch(1)} disabled={galleryLoading}>AI gợi ý top ảnh</button>
+                  <button className="btn" onClick={()=>autoSuggestGalleryBatch(0)} disabled={galleryLoading}>AI đánh lại top ảnh</button>
                   <button className="btn" onClick={()=>{const p=Math.max(1,Number(galleryPage)-1); loadGallery(p);}} disabled={galleryLoading||Number(galleryPage)<=1}>Trang trước</button>
                   <button className="btn" onClick={()=>{loadGallery(Number(galleryPage)+1);}} disabled={galleryLoading||Number(galleryPage)>=Number(galleryPages)}>Trang sau</button>
+                </div>
+                <div className="row" style={{gridTemplateColumns:"1fr auto auto",marginTop:8,alignItems:"center"}}>
+                  <div className="tiny">CSV nhãn: <b>{galleryCsv()}</b> · Graph output: <b>{galleryGraphJson()}</b></div>
+                  <button className="btn" onClick={()=>compileGalleryDataset(false)} disabled={galleryLoading}>Compile dataset top ảnh</button>
+                  <button className="btn dark" onClick={()=>compileGalleryDataset(true)} disabled={galleryLoading}>Compile + tách train/val/test</button>
                 </div>
                 {galleryPages>0 && <div className="tiny" style={{marginTop:6}}>Trang {galleryPage}/{galleryPages} | tổng {galleryTotal} ảnh</div>}
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10,marginTop:10}}>

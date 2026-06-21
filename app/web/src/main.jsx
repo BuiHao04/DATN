@@ -480,6 +480,7 @@ function App(){
   const [gallerySort,setGallerySort]=useState("score_desc");
   const [galleryShowBoxes,setGalleryShowBoxes]=useState(false);
   const [galleryLoading,setGalleryLoading]=useState(false);
+  const [galleryAutoJobId,setGalleryAutoJobId]=useState("");
   const [galleryZoom,setGalleryZoom]=useState(null);
   const [galleryInspect,setGalleryInspect]=useState(null);
   const [galleryInspectLoading,setGalleryInspectLoading]=useState(false);
@@ -623,7 +624,24 @@ function App(){
   const trainFullJob=latestByMode["train_gcn_full"];
   const stageBTestJob=latestByMode["test_gcn"];
   const inferJob=latestByMode["gcn_infer"];
+  const galleryAiJob = useMemo(()=>{
+    const csvPath = `${String(galleryDir||"").replace(/\/+$/,"")}/nodes_to_label.csv`.trim();
+    if(!csvPath) return null;
+    if(galleryAutoJobId){
+      const exact = jobs.find(j=>j.id===galleryAutoJobId);
+      if(exact) return exact;
+    }
+    return jobs.find((j)=>
+      j.mode==="labeling_auto_suggest" &&
+      String(j?.args?.input_csv || "").trim()===csvPath
+    ) || null;
+  },[jobs, galleryAutoJobId, galleryDir]);
   useEffect(()=>{const run=jobs.some(j=>j.status==="queued"||j.status==="running"); pollRef.current=setTimeout(loadJobs, run?5000:15000); return ()=>clearTimeout(pollRef.current);},[jobs]);
+  useEffect(()=>{
+    if(galleryAiJob?.id && galleryAiJob.id !== galleryAutoJobId){
+      setGalleryAutoJobId(galleryAiJob.id);
+    }
+  },[galleryAiJob?.id]);
   useEffect(()=>{
     if(stageBTestJob?.status==="success" && stageBEval.output_eval){
       loadEvalReport();
@@ -753,6 +771,7 @@ function App(){
       require_llm:1
     });
     if(d?.id){
+      setGalleryAutoJobId(d.id);
       setLabelHint(onlyEmpty===0
         ? `Đã tạo job AI đánh nhãn LẠI cho gallery ${csvPath}: ${d.id}.`
         : `Đã tạo job AI gợi ý nhãn cho các dòng còn trống trong gallery ${csvPath}: ${d.id}. Job sẽ lưu sau từng batch 10 ảnh.`);
@@ -764,6 +783,14 @@ function App(){
         llm_text_batch_size:10
       });
     }
+  };
+  const stopGalleryAutoSuggest=async()=>{
+    if(!galleryAiJob?.id) return;
+    const r=await fetch(`/api/jobs/${galleryAiJob.id}/stop`,{method:"POST"});
+    const d=await r.json();
+    setOut(JSON.stringify(d,null,2));
+    await loadJobs();
+    setLabelHint(`Đã gửi yêu cầu dừng AI top ảnh cho job ${galleryAiJob.id}.`);
   };
   const galleryBaseDir=()=>String(galleryDir||"data/labeling_top1000").replace(/[\\/]+$/,"");
   const galleryGraphJson=()=>`${galleryBaseDir()}/stage_b_vi_dataset.json`;
@@ -1027,6 +1054,12 @@ function App(){
       setGalleryLoading(false);
     }
   };
+  const galleryAiProgress = galleryAiJob?.progress || null;
+  const galleryAiCurrent = Number(galleryAiProgress?.current_docs || 0);
+  const galleryAiTotal = Number(galleryAiProgress?.total_docs || 0);
+  const galleryAiPercent = Number(galleryAiProgress?.percent || 0);
+  const galleryAiCurrentBatch = Number(galleryAiProgress?.current_batch_docs || 0);
+  const galleryAiLastLog = lastLog(galleryAiJob);
   const openGraphInspect=async(docId)=>{
     setGraphInspectLoading(true);
     setInspectTab("ocr");
@@ -2518,8 +2551,11 @@ function App(){
                   <input className="input" type="number" min="12" max="200" value={galleryPageSize} onChange={e=>setGalleryPageSize(e.target.value)} title="số ảnh mỗi trang" />
                   <label className="tiny" style={{display:"flex",alignItems:"center",gap:6}}><input type="checkbox" checked={galleryShowBoxes} onChange={e=>setGalleryShowBoxes(e.target.checked)} />Hiện box OCR</label>
                   <button className="btn dark" onClick={()=>loadGallery(1)} disabled={galleryLoading}>{galleryLoading?"Đang tải...":"Xem ảnh"}</button>
-                  <button className="btn" onClick={()=>autoSuggestGalleryBatch(1)} disabled={galleryLoading}>AI gợi ý top ảnh</button>
-                  <button className="btn" onClick={()=>autoSuggestGalleryBatch(0)} disabled={galleryLoading}>AI đánh lại top ảnh</button>
+                  <button className="btn" onClick={()=>autoSuggestGalleryBatch(1)} disabled={galleryLoading || ["queued","running","stopping"].includes(String(galleryAiJob?.status||""))}>AI gợi ý top ảnh</button>
+                  <button className="btn" onClick={()=>autoSuggestGalleryBatch(0)} disabled={galleryLoading || ["queued","running","stopping"].includes(String(galleryAiJob?.status||""))}>AI đánh lại top ảnh</button>
+                  <button className="btn" onClick={stopGalleryAutoSuggest} disabled={!galleryAiJob || !["queued","running","stopping"].includes(String(galleryAiJob?.status||""))}>
+                    {galleryAiJob?.status==="stopping" ? "Đang dừng AI..." : "Dừng AI top ảnh"}
+                  </button>
                   <button className="btn" onClick={()=>{const p=Math.max(1,Number(galleryPage)-1); loadGallery(p);}} disabled={galleryLoading||Number(galleryPage)<=1}>Trang trước</button>
                   <button className="btn" onClick={()=>{loadGallery(Number(galleryPage)+1);}} disabled={galleryLoading||Number(galleryPage)>=Number(galleryPages)}>Trang sau</button>
                 </div>
@@ -2528,6 +2564,26 @@ function App(){
                   <button className="btn" onClick={()=>compileGalleryDataset(false)} disabled={galleryLoading}>Compile dataset top ảnh</button>
                   <button className="btn dark" onClick={()=>compileGalleryDataset(true)} disabled={galleryLoading}>Compile + tách train/val/test</button>
                 </div>
+                <div className="tiny" style={{marginTop:8}}>
+                  AI top ảnh: <b>{galleryAiCurrent}</b>/<b>{galleryAiTotal}</b> ảnh ({galleryAiPercent}%)
+                  {galleryAiCurrentBatch>0 ? ` · batch gần nhất ${galleryAiCurrentBatch} ảnh` : ""}
+                  {galleryAiJob?.status ? ` · trạng thái: ${galleryAiJob.status}` : ""}
+                  {galleryAiJob?.id ? ` · job: ${galleryAiJob.id}` : ""}
+                </div>
+                <div className="bar" style={{marginTop:4}}><div style={{width:`${galleryAiPercent}%`}}/></div>
+                {(galleryAiJob?.status==="stopped" || galleryAiJob?.status==="stopping") && (
+                  <div className="tiny" style={{marginTop:6}}>
+                    {galleryAiJob?.status==="stopped"
+                      ? "AI top ảnh đã dừng an toàn. Các batch đã xử lý vẫn được giữ lại trong CSV của top ảnh."
+                      : "Đã gửi yêu cầu dừng AI top ảnh. Hệ thống sẽ lưu batch hiện tại rồi dừng."}
+                  </div>
+                )}
+                {galleryAiJob && (
+                  <div className="term" style={{marginTop:8}}>
+                    <h4>LOG AI TOP ẢNH</h4>
+                    <pre>{galleryAiLastLog}</pre>
+                  </div>
+                )}
                 {galleryPages>0 && <div className="tiny" style={{marginTop:6}}>Trang {galleryPage}/{galleryPages} | tổng {galleryTotal} ảnh</div>}
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10,marginTop:10}}>
                   {galleryItems.map((it)=>{

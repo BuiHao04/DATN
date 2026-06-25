@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import os
+import inspect
+import re
 from contextlib import contextmanager
 from functools import lru_cache
 from typing import List, Tuple
@@ -113,6 +115,10 @@ def _resolve_ocr_engine(engine: str | None = None) -> str:
 
 def _ocr_config_signature() -> tuple:
     return (
+        os.getenv("OCR_TEXT_DETECTION_MODEL", _default_ppocrv6_model("det")),
+        os.getenv("OCR_TEXT_RECOGNITION_MODEL", _default_ppocrv6_model("rec")),
+        _env_bool("OCR_USE_DOCLINE_ORIENTATION", True),
+        _env_bool("OCR_USE_DOC_UNWARPING", False),
         _env_int("OCR_DET_LIMIT_SIDE_LEN", 1536),
         os.getenv("OCR_DET_LIMIT_TYPE", "max"),
         _env_float("OCR_DET_DB_THRESH", 0.25),
@@ -120,6 +126,7 @@ def _ocr_config_signature() -> tuple:
         _env_float("OCR_DET_DB_UNCLIP_RATIO", 1.25),
         _env_bool("OCR_USE_DILATION", False),
         _env_float("OCR_DROP_SCORE", 0.45),
+        _env_float("OCR_REC_SCORE_THRESH", 0.25),
         _env_int("OCR_MAX_BATCH_SIZE", 10),
         _env_bool("OCR_SHOW_LOG", True),
     )
@@ -133,10 +140,15 @@ _OCR_OVERRIDE_ENV_MAP = {
     "det_db_unclip_ratio": "OCR_DET_DB_UNCLIP_RATIO",
     "use_dilation": "OCR_USE_DILATION",
     "drop_score": "OCR_DROP_SCORE",
+    "rec_score_thresh": "OCR_REC_SCORE_THRESH",
     "max_batch_size": "OCR_MAX_BATCH_SIZE",
     "show_log": "OCR_SHOW_LOG",
     "upscale_min_side": "OCR_UPSCALE_MIN_SIDE",
     "upscale_factor": "OCR_UPSCALE_FACTOR",
+    "text_detection_model_name": "OCR_TEXT_DETECTION_MODEL",
+    "text_recognition_model_name": "OCR_TEXT_RECOGNITION_MODEL",
+    "use_textline_orientation": "OCR_USE_DOCLINE_ORIENTATION",
+    "use_doc_unwarping": "OCR_USE_DOC_UNWARPING",
 }
 
 
@@ -365,8 +377,50 @@ def _normalize_document_image(image: np.ndarray) -> np.ndarray:
     return normalized
 
 
+def _default_ppocrv6_model(kind: str) -> str:
+    tier = os.getenv("OCR_PPOCRV6_TIER", "small").strip().lower()
+    if tier not in {"tiny", "small", "medium"}:
+        tier = "small"
+    return f"PP-OCRv6_{tier}_{kind}"
+
+
+def _is_paddleocr_v3_api() -> bool:
+    try:
+        return "text_detection_model_name" in inspect.signature(PaddleOCR).parameters
+    except Exception:
+        return False
+
+
+def _resolve_model_name(kind: str) -> str | None:
+    explicit = os.getenv("OCR_TEXT_DETECTION_MODEL" if kind == "det" else "OCR_TEXT_RECOGNITION_MODEL", "").strip()
+    if explicit:
+        return explicit
+    requested = os.getenv("OCR_PPOCR_VERSION", "v6").strip().lower()
+    if requested in {"v5", "ppocrv5", "pp-ocrv5"}:
+        return "PP-OCRv5_server_det" if kind == "det" else "PP-OCRv5_server_rec"
+    if requested in {"v4", "ppocrv4", "pp-ocrv4"}:
+        return "PP-OCRv4_server_det" if kind == "det" else "PP-OCRv4_server_rec"
+    return _default_ppocrv6_model(kind)
+
+
 @lru_cache(maxsize=24)
 def _get_paddle_ocr(lang: str, use_gpu: bool, det_only: bool, _config_signature: tuple) -> PaddleOCR:
+    if _is_paddleocr_v3_api():
+        return PaddleOCR(
+            text_detection_model_name=_resolve_model_name("det"),
+            text_recognition_model_name=_resolve_model_name("rec"),
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=_env_bool("OCR_USE_DOC_UNWARPING", False),
+            use_textline_orientation=_env_bool("OCR_USE_DOCLINE_ORIENTATION", True),
+            text_det_limit_side_len=_env_int("OCR_DET_LIMIT_SIDE_LEN", 1920),
+            text_det_limit_type=os.getenv("OCR_DET_LIMIT_TYPE", "max"),
+            text_det_thresh=_env_float("OCR_DET_DB_THRESH", 0.20),
+            text_det_box_thresh=_env_float("OCR_DET_DB_BOX_THRESH", 0.45),
+            text_det_unclip_ratio=_env_float("OCR_DET_DB_UNCLIP_RATIO", 1.80),
+            text_rec_score_thresh=_env_float("OCR_REC_SCORE_THRESH", 0.25),
+            text_recognition_batch_size=_env_int("OCR_MAX_BATCH_SIZE", 16),
+            textline_orientation_batch_size=_env_int("OCR_MAX_BATCH_SIZE", 16),
+        )
     return PaddleOCR(
         use_angle_cls=True,
         lang=lang,
@@ -424,6 +478,71 @@ def _box_to_quad(box, scale_x: float, scale_y: float) -> tuple[tuple[float, floa
     return tuple((float(p[0] / scale_x), float(p[1] / scale_y)) for p in box[:4])
 
 
+def _paddle_v3_result_payload(result_item) -> dict:
+    if result_item is None:
+        return {}
+    if isinstance(result_item, dict):
+        return result_item.get("res", result_item)
+    json_payload = getattr(result_item, "json", None)
+    if isinstance(json_payload, dict):
+        return json_payload.get("res", json_payload)
+    try:
+        as_dict = dict(result_item)
+        return as_dict.get("res", as_dict)
+    except Exception:
+        return {}
+
+
+def _poly_to_box_points(poly) -> list[list[float]]:
+    points = []
+    for pt in list(poly)[:4]:
+        try:
+            points.append([float(pt[0]), float(pt[1])])
+        except Exception:
+            pass
+    if len(points) == 4:
+        return points
+    if len(poly) >= 4 and not isinstance(poly[0], (list, tuple, np.ndarray)):
+        x1, y1, x2, y2 = [float(v) for v in list(poly)[:4]]
+        return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+    return points
+
+
+def _run_paddle_predict(ocr: PaddleOCR, image_input):
+    if hasattr(ocr, "predict"):
+        return list(ocr.predict(image_input))
+    try:
+        return ocr.ocr(image_input, cls=True)
+    except TypeError:
+        return ocr.ocr(image_input)
+
+
+def _paddle_records(image_input, lang: str, use_gpu: bool, det_only: bool):
+    ocr = _get_paddle_ocr(lang or "vi", use_gpu, det_only=det_only, _config_signature=_ocr_config_signature())
+    result = _run_paddle_predict(ocr, image_input)
+    if _is_paddleocr_v3_api():
+        records = []
+        for item in result:
+            payload = _paddle_v3_result_payload(item)
+            texts = payload.get("rec_texts") or []
+            scores = payload.get("rec_scores") or []
+            polys = payload.get("rec_polys") or payload.get("dt_polys") or []
+            for text, score, poly in zip(texts, scores, polys):
+                box = _poly_to_box_points(poly)
+                if len(box) == 4:
+                    records.append({"box": box, "text": str(text).strip(), "score": float(score)})
+        return records
+
+    records = []
+    for line in _normalize_lines(result):
+        if not line or len(line) < 2:
+            continue
+        text = str(line[1][0]).strip() if line[1] else ""
+        score = float(line[1][1]) if line[1] and len(line[1]) > 1 else 0.0
+        records.append({"box": line[0], "text": text, "score": score})
+    return records
+
+
 def _crop_from_box(image: np.ndarray, box) -> Image.Image | None:
     h, w = image.shape[:2]
     xs = [int(round(p[0])) for p in box]
@@ -470,19 +589,13 @@ def _perspective_crop_from_box(image: np.ndarray, box) -> Image.Image | None:
 
 
 def _run_paddle_ocr(image_input, lang: str, use_gpu: bool, scale_x: float, scale_y: float) -> List[OCRNode]:
-    ocr = _get_paddle_ocr(lang or "vi", use_gpu, det_only=False, _config_signature=_ocr_config_signature())
-    try:
-        result = ocr.ocr(image_input, cls=True)
-    except TypeError:
-        result = ocr.ocr(image_input)
-
     nodes: List[OCRNode] = []
-    for line in _normalize_lines(result):
-        if not line or len(line) < 2:
+    for record in _paddle_records(image_input, lang, use_gpu, det_only=False):
+        box = record["box"]
+        text = _normalize_ocr_text(record["text"])
+        score = float(record["score"])
+        if not text:
             continue
-        box = line[0]
-        text = line[1][0]
-        score = float(line[1][1])
         x1, y1, x2, y2 = _box_to_rect(box, scale_x, scale_y)
         quad = _box_to_quad(box, scale_x, scale_y)
         nodes.append(
@@ -504,7 +617,6 @@ def _run_paddle_ocr(image_input, lang: str, use_gpu: bool, scale_x: float, scale
 
 
 def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, scale_y: float) -> List[OCRNode]:
-    detector = _get_paddle_ocr(lang or "vi", use_gpu, det_only=False, _config_signature=_ocr_config_signature())
     viet_use_gpu = _resolve_vietocr_gpu()
     predictor = None
     vietocr_available = True
@@ -515,11 +627,6 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
         vietocr_available = False
         vietocr_error = str(exc)
         print(f"[OCR] VietOCR unavailable, fallback to Paddle text: {exc}")
-    try:
-        result = detector.ocr(image_input, cls=True)
-    except TypeError:
-        result = detector.ocr(image_input)
-
     if isinstance(image_input, str):
         image = cv2.imread(image_input)
     else:
@@ -529,6 +636,9 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
             requested_engine="vietocr",
             actual_engine="empty",
             recognizer_backend="none",
+            paddleocr_api="v3" if _is_paddleocr_v3_api() else "v2",
+            text_detection_model=_resolve_model_name("det") if _is_paddleocr_v3_api() else "",
+            text_recognition_model=_resolve_model_name("rec") if _is_paddleocr_v3_api() else "",
             vietocr_available=vietocr_available,
             vietocr_error=vietocr_error,
             used_gpu=viet_use_gpu,
@@ -538,12 +648,10 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
 
     # Pass 1: collect detected boxes + Paddle fallback text, and crop each box.
     records: list[dict] = []
-    for line in _normalize_lines(result):
-        if not line or len(line) < 2:
-            continue
-        box = line[0]
-        paddle_text = str(line[1][0]).strip() if len(line) > 1 and line[1] else ""
-        paddle_score = float(line[1][1]) if len(line) > 1 and line[1] and len(line[1]) > 1 else 0.0
+    for paddle_record in _paddle_records(image_input, lang, use_gpu, det_only=False):
+        box = paddle_record["box"]
+        paddle_text = str(paddle_record["text"]).strip()
+        paddle_score = float(paddle_record["score"])
         crop = _perspective_crop_from_box(image, box) if (vietocr_available and predictor is not None) else None
         records.append({"box": box, "text": paddle_text, "score": paddle_score, "crop": crop})
 
@@ -557,9 +665,16 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
                 for pos, vtext, vprob in zip(batch_pos, viet_texts, viet_probs):
                     vtext = str(vtext).strip()
                     if vtext:
-                        records[pos]["text"] = vtext
+                        text, score, source = _choose_hybrid_text(
+                            records[pos].get("text", ""),
+                            float(records[pos].get("score", 0.0) or 0.0),
+                            vtext,
+                            float(vprob),
+                        )
+                        records[pos]["text"] = text
+                        records[pos]["text_source"] = source
                         try:
-                            records[pos]["score"] = float(vprob)
+                            records[pos]["score"] = float(score)
                         except Exception:
                             records[pos]["score"] = 1.0
             except Exception as exc:
@@ -568,7 +683,7 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
     # Pass 3: build nodes.
     nodes: List[OCRNode] = []
     for r in records:
-        text = r["text"]
+        text = _normalize_ocr_text(r["text"])
         if not text:
             continue
         x1, y1, x2, y2 = _box_to_rect(r["box"], scale_x, scale_y)
@@ -592,6 +707,9 @@ def _run_vietocr_hybrid(image_input, lang: str, use_gpu: bool, scale_x: float, s
         requested_engine="vietocr",
         actual_engine="vietocr" if vietocr_available and predictor is not None else "paddle_fallback",
         recognizer_backend="vietocr" if vietocr_available and predictor is not None else "paddle",
+        paddleocr_api="v3" if _is_paddleocr_v3_api() else "v2",
+        text_detection_model=_resolve_model_name("det") if _is_paddleocr_v3_api() else "",
+        text_recognition_model=_resolve_model_name("rec") if _is_paddleocr_v3_api() else "",
         vietocr_available=vietocr_available,
         vietocr_error=vietocr_error,
         used_gpu=viet_use_gpu,
@@ -631,6 +749,62 @@ def _is_numeric_like(text: str) -> bool:
     return bool(any(ch.isdigit() for ch in t)) and bool(
         all(ch.isdigit() or ch in ".,:/-()% " for ch in t)
     )
+
+
+def _has_vietnamese_letters(text: str) -> bool:
+    return bool(re.search(r"[ăâêôơưđáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]", str(text or "").lower()))
+
+
+def _normalize_ocr_text(text: str) -> str:
+    out = re.sub(r"\s+", " ", str(text or "")).strip()
+    replacements = {
+        "HÒA ĐƠN": "HÓA ĐƠN",
+        "HOA ĐƠN": "HÓA ĐƠN",
+        "HÓA DON": "HÓA ĐƠN",
+        "BẢN HÀNG": "BÁN HÀNG",
+        "Thành tiến": "Thành tiền",
+        "Thành tien": "Thành tiền",
+        "Tőng": "Tổng",
+        "T6ng": "Tổng",
+        "T8ng": "Tổng",
+        "Tién": "Tiền",
+        "trã": "trả",
+        "cám an": "cảm ơn",
+        "hen găp lai": "hẹn gặp lại",
+        "găp lai": "gặp lại",
+    }
+    for src, dst in replacements.items():
+        out = out.replace(src, dst)
+    out = re.sub(r"(Ngày:\s*\d{1,2}/\d{1,2}/\d{4}-\d{1,2})[.](\d{2})", r"\1:\2", out)
+    return out
+
+
+def _choose_hybrid_text(paddle_text: str, paddle_score: float, viet_text: str, viet_score: float) -> tuple[str, float, str]:
+    paddle_text = _normalize_ocr_text(paddle_text)
+    viet_text = _normalize_ocr_text(viet_text)
+    if not viet_text:
+        return paddle_text, paddle_score, "paddle_empty_vietocr"
+    if not paddle_text:
+        return viet_text, viet_score, "vietocr_empty_paddle"
+
+    compact_paddle = re.sub(r"\s+", "", paddle_text)
+    compact_viet = re.sub(r"\s+", "", viet_text)
+    paddle_alpha_upper = bool(re.fullmatch(r"[A-Z0-9 &.-]+", paddle_text))
+    viet_lost_spaces = " " in paddle_text and " " not in viet_text and compact_paddle.lower() == compact_viet.lower()
+    if paddle_alpha_upper and viet_lost_spaces and paddle_score >= 0.95:
+        return paddle_text, paddle_score, "paddle_preserve_spaces"
+
+    if _is_numeric_like(paddle_text) or re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", paddle_text):
+        if paddle_score >= 0.90:
+            return paddle_text, paddle_score, "paddle_numeric"
+
+    keyword_gain = any(k in viet_text.lower() for k in ["tổng", "tiền", "đơn giá", "hàng", "ngân", "cảm ơn", "hẹn gặp"])
+    if _has_vietnamese_letters(viet_text) and (keyword_gain or viet_score >= 0.82):
+        return viet_text, viet_score, "vietocr_vietnamese"
+
+    if viet_score >= paddle_score + 0.05:
+        return viet_text, viet_score, "vietocr_score"
+    return paddle_text, paddle_score, "paddle_score"
 
 
 def _line_groups(nodes: List[OCRNode]) -> list[list[OCRNode]]:
@@ -726,6 +900,9 @@ def _dispatch_engine(
         requested_engine="paddle",
         actual_engine="paddle",
         recognizer_backend="paddle",
+        paddleocr_api="v3" if _is_paddleocr_v3_api() else "v2",
+        text_detection_model=_resolve_model_name("det") if _is_paddleocr_v3_api() else "",
+        text_recognition_model=_resolve_model_name("rec") if _is_paddleocr_v3_api() else "",
         vietocr_available=False,
         vietocr_error="",
         used_gpu=use_gpu,

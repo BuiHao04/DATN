@@ -101,6 +101,14 @@ class GcnInferRequest(BaseModel):
     checkpoint: str | None = None
     ocr_debug_image: str = "outputs/ocr_boxes.jpg"
     output_json: str = "outputs/ocr_result.json"
+    reuse_ocr_json: int = 0
+    det_db_thresh: float = 0.20
+    det_db_box_thresh: float = 0.45
+    det_db_unclip_ratio: float = 1.80
+    drop_score: float = 0.25
+    use_dilation: int = 0
+    det_limit_side_len: int = 1920
+    upscale_factor: float = 1.0
 
 
 class PretrainedRequest(BaseModel):
@@ -251,13 +259,13 @@ class SingleImagePreviewRequest(BaseModel):
     image: str
     lang: str = "vi"
     ocr_engine: str = "paddle"
-    det_db_thresh: float = 0.25
-    det_db_box_thresh: float = 0.6
-    det_db_unclip_ratio: float = 1.25
-    drop_score: float = 0.45
+    det_db_thresh: float = 0.20
+    det_db_box_thresh: float = 0.45
+    det_db_unclip_ratio: float = 1.80
+    drop_score: float = 0.25
     use_dilation: int = 0
-    det_limit_side_len: int = 1600
-    upscale_factor: float = 1.6
+    det_limit_side_len: int = 1920
+    upscale_factor: float = 1.0
     with_ai: int = 0
     llm_model: str = "gpt-4.1-mini"
     output_dir: str = "data/single_image_check"
@@ -272,13 +280,13 @@ class PrepareOcrLabelingRequest(BaseModel):
     output_dir: str = "data/labeling_stage_b"
     lang: str = "vi"
     ocr_engine: str = "paddle"
-    det_db_thresh: float = 0.25
-    det_db_box_thresh: float = 0.6
-    det_db_unclip_ratio: float = 1.25
-    drop_score: float = 0.45
+    det_db_thresh: float = 0.20
+    det_db_box_thresh: float = 0.45
+    det_db_unclip_ratio: float = 1.80
+    drop_score: float = 0.25
     use_dilation: int = 0
-    det_limit_side_len: int = 1600
-    upscale_factor: float = 1.6
+    det_limit_side_len: int = 1920
+    upscale_factor: float = 1.0
     save_debug_images: int = 1
     copy_images: int = 1
     save_every_images: int = 10
@@ -995,6 +1003,9 @@ def _run_job(job_id: str, cmd: list[str]) -> None:
                                 "current_file": name,
                             }
                 _save_jobs(jobs)
+                if stop_flag_path.exists() and proc.poll() is None:
+                    proc.terminate()
+                    break
 
         proc.wait()
 
@@ -1149,6 +1160,41 @@ def test_gcn(req: TestGcnRequest) -> dict[str, Any]:
 @app.post("/api/pipeline/preprocess-gcn-dataset")
 def preprocess_dataset(req: PreprocessDatasetRequest) -> dict[str, Any]:
     return _enqueue_job("preprocess_gcn_dataset", req.model_dump())
+
+
+@app.post("/api/pipeline/preprocess-gcn-dataset-now")
+def preprocess_dataset_now(req: PreprocessDatasetRequest) -> dict[str, Any]:
+    from pipeline.services.gcn_dataset_preprocess_service import GCNDatasetPreprocessService
+
+    input_path = SRC_DIR / req.input_csv
+    if not input_path.exists():
+        raise HTTPException(status_code=400, detail=f"CSV not found: {req.input_csv}")
+
+    output_path = SRC_DIR / req.output_json
+    service = GCNDatasetPreprocessService()
+    service.preprocess_csv(
+        input_csv_path=str(input_path),
+        output_json_path=str(output_path),
+        doc_id_col=req.doc_id_col,
+        text_col=req.text_col,
+        label_col=req.label_col,
+        score_col=req.score_col,
+        x1_col=req.x1_col,
+        y1_col=req.y1_col,
+        x2_col=req.x2_col,
+        y2_col=req.y2_col,
+        same_line_ratio=req.same_line_ratio,
+        near_threshold=req.near_threshold,
+        min_nodes_per_graph=req.min_nodes_per_graph,
+    )
+
+    data = json.loads(output_path.read_text(encoding="utf-8"))
+    return {
+        "status": "ok",
+        "input_csv": req.input_csv,
+        "output_json": req.output_json,
+        "meta": data.get("meta", {}),
+    }
 
 
 @app.post("/api/pipeline/split-gcn-dataset")
@@ -2726,7 +2772,15 @@ def labeling_graph_inspect(req: LabelingGraphInspectRequest) -> dict[str, Any]:
     if not preview_path:
         image_index = _stage_b_image_index(csv_path.parent)
         preview_path = _find_image_for_doc(req.doc_id, image_index)
-    feature_names = ["text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score"]
+    feature_names = [
+        "text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score",
+        "looks_money", "has_total_kw", "has_item_header_kw", "has_date", "has_time", "has_phone",
+        "has_tax_kw", "has_invoice_kw", "has_payment_kw", "is_top", "is_middle", "is_bottom",
+        "is_left", "is_center", "is_right", "node_order", "has_alpha", "has_vnd",
+        "has_subtotal_kw", "has_discount_kw", "has_service_kw", "has_cashier_kw", "has_address_kw",
+        "has_receipt_title_kw", "has_footer_kw", "has_unit_word", "qty_candidate", "long_numeric",
+        "digit_count_norm", "numeric_value_norm", "x_band_0", "x_band_1", "x_band_2", "x_band_3", "x_band_4",
+    ]
     node_items = []
     for i, node in enumerate(nodes):
         node_items.append(
@@ -3020,7 +3074,15 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
         node["heuristic_confidence"] = heuristic_confidence
         node["heuristic_reason"] = heuristic_reason
 
-    feature_names = ["text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score"]
+    feature_names = [
+        "text_len", "has_digit", "has_money_token", "cx_norm", "cy_norm", "w_norm", "h_norm", "ocr_score",
+        "looks_money", "has_total_kw", "has_item_header_kw", "has_date", "has_time", "has_phone",
+        "has_tax_kw", "has_invoice_kw", "has_payment_kw", "is_top", "is_middle", "is_bottom",
+        "is_left", "is_center", "is_right", "node_order", "has_alpha", "has_vnd",
+        "has_subtotal_kw", "has_discount_kw", "has_service_kw", "has_cashier_kw", "has_address_kw",
+        "has_receipt_title_kw", "has_footer_kw", "has_unit_word", "qty_candidate", "long_numeric",
+        "digit_count_norm", "numeric_value_norm", "x_band_0", "x_band_1", "x_band_2", "x_band_3", "x_band_4",
+    ]
     features = build_features(ocr_nodes).tolist() if ocr_nodes else []
     edges = build_graph_edges(ocr_nodes, same_line_ratio=req.same_line_ratio, near_threshold=req.near_threshold)
     edge_index = [[], []]
@@ -3155,7 +3217,7 @@ def single_image_preview(req: SingleImagePreviewRequest) -> dict[str, Any]:
 
 @app.get("/api/pipeline/labeling-gallery")
 def labeling_gallery(
-    dir: str = "data/labeling_top1000",
+    dir: str = "data/labeling_top1000_ppocrv6",
     page: int = 1,
     page_size: int = 60,
     sort: str = "score_desc",

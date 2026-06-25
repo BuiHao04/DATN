@@ -7,22 +7,110 @@
 # cleanly into the process, then paddle adapts.
 import torch  # noqa: F401
 import argparse
+import json
+from pathlib import Path
 from loguru import logger  
 
 
+def _load_existing_ocr_nodes_for_image(image_path: str):
+    from pipeline.core.schema import OCRNode
+
+    image_name = Path(image_path).name
+    if not image_name:
+        return None
+
+    candidates = []
+    for base in (
+        Path("data/labeling_top1000/ocr_json"),
+        Path("data/labeling_stage_b/ocr_json"),
+        Path("data/single_image_check/ocr_json"),
+    ):
+        if not base.exists():
+            continue
+        for json_path in base.glob("*.json"):
+            try:
+                payload = json.loads(json_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if payload.get("image_name") == image_name or str(payload.get("image_relpath", "")).endswith(f"/{image_name}"):
+                candidates.append((json_path, payload))
+
+    if len(candidates) != 1:
+        return None
+
+    json_path, payload = candidates[0]
+    nodes = []
+    for raw_node in payload.get("nodes", []):
+        bbox = raw_node.get("bbox") or [0, 0, 0, 0]
+        x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+        if x2 < x1:
+            x1, x2 = x2, x1
+        if y2 < y1:
+            y1, y2 = y2, y1
+        w = max(x2 - x1, 1e-6)
+        h = max(y2 - y1, 1e-6)
+        quad = raw_node.get("quad")
+        nodes.append(
+            OCRNode(
+                text=str(raw_node.get("text", "")),
+                score=float(raw_node.get("score", 0.0)),
+                x1=x1,
+                y1=y1,
+                x2=x2,
+                y2=y2,
+                cx=(x1 + x2) / 2.0,
+                cy=(y1 + y2) / 2.0,
+                w=w,
+                h=h,
+                quad=tuple(tuple(float(v) for v in pt[:2]) for pt in quad[:4]) if isinstance(quad, list) and len(quad) >= 4 else None,
+            )
+        )
+    return nodes, json_path, payload
+
+
 def cmd_gcn_infer(args: argparse.Namespace) -> None:
+    from pipeline.core.ocr_engine import get_last_ocr_runtime_info, run_ocr_with_processed
     from pipeline.services.gcn_pipeline_service import GCNPipelineService
     from pipeline.services.ocr_service import OCRService
 
     gcn_service = GCNPipelineService()
     ocr_service = OCRService()
 
-    nodes = ocr_service.run(args.image, lang=args.lang, engine=args.ocr_engine)
-    ocr_service.save_debug_image(args.image, nodes, args.ocr_debug_image)
+    ocr_overrides = {
+        "det_db_thresh": args.det_db_thresh,
+        "det_db_box_thresh": args.det_db_box_thresh,
+        "det_db_unclip_ratio": args.det_db_unclip_ratio,
+        "drop_score": args.drop_score,
+        "use_dilation": args.use_dilation,
+        "det_limit_side_len": args.det_limit_side_len,
+        "upscale_factor": args.upscale_factor,
+    }
+    reused_payload = None
+    reused_ocr_json = None
+    existing = _load_existing_ocr_nodes_for_image(args.image) if bool(args.reuse_ocr_json) else None
+    if existing:
+        nodes, reused_ocr_json, reused_payload = existing
+        ocr_service.save_debug_image(args.image, nodes, args.ocr_debug_image)
+        logger.info("Reused OCR JSON for infer: {}", reused_ocr_json)
+    else:
+        nodes, processed_image = run_ocr_with_processed(
+            args.image,
+            lang=args.lang,
+            engine=args.ocr_engine,
+            overrides=ocr_overrides,
+        )
+        if processed_image is not None:
+            ocr_service.save_debug_image_from_array(processed_image, nodes, args.ocr_debug_image)
+        else:
+            ocr_service.save_debug_image(args.image, nodes, args.ocr_debug_image)
 
     result = gcn_service.infer(nodes, checkpoint_path=args.checkpoint)
     result["image_path"] = args.image
     result["ocr_boxes_image"] = args.ocr_debug_image
+    result["ocr_source"] = "reused_ocr_json" if reused_ocr_json else "rerun_ocr"
+    result["reused_ocr_json"] = str(reused_ocr_json) if reused_ocr_json else ""
+    result["ocr_config"] = (reused_payload or {}).get("ocr_config") or ocr_overrides
+    result["ocr_runtime"] = (reused_payload or {}).get("ocr_runtime") or get_last_ocr_runtime_info()
     gcn_service.save_result(result, args.output_json)
 
     logger.info("Saved GCN infer JSON: {}", args.output_json)
@@ -295,6 +383,14 @@ def build_parser() -> argparse.ArgumentParser:
     gcn.add_argument("--checkpoint", default=None, help="Trained GCN checkpoint (.pt). If omitted, use rule-based fallback.")
     gcn.add_argument("--ocr-debug-image", default="outputs/ocr_boxes.jpg")
     gcn.add_argument("--output-json", default="outputs/ocr_result.json")
+    gcn.add_argument("--reuse-ocr-json", type=int, default=0)
+    gcn.add_argument("--det-db-thresh", type=float, default=0.20)
+    gcn.add_argument("--det-db-box-thresh", type=float, default=0.45)
+    gcn.add_argument("--det-db-unclip-ratio", type=float, default=1.80)
+    gcn.add_argument("--drop-score", type=float, default=0.25)
+    gcn.add_argument("--use-dilation", type=int, default=0)
+    gcn.add_argument("--det-limit-side-len", type=int, default=1920)
+    gcn.add_argument("--upscale-factor", type=float, default=1.0)
     gcn.set_defaults(func=cmd_gcn_infer)
 
     pre = sub.add_parser("pretrained")
@@ -406,13 +502,13 @@ def build_parser() -> argparse.ArgumentParser:
     po.add_argument("--output-dir", default="data/labeling_stage_b")
     po.add_argument("--lang", default="vi")
     po.add_argument("--ocr-engine", default="paddle")
-    po.add_argument("--det-db-thresh", type=float, default=0.25)
-    po.add_argument("--det-db-box-thresh", type=float, default=0.6)
-    po.add_argument("--det-db-unclip-ratio", type=float, default=1.25)
-    po.add_argument("--drop-score", type=float, default=0.45)
+    po.add_argument("--det-db-thresh", type=float, default=0.20)
+    po.add_argument("--det-db-box-thresh", type=float, default=0.45)
+    po.add_argument("--det-db-unclip-ratio", type=float, default=1.80)
+    po.add_argument("--drop-score", type=float, default=0.25)
     po.add_argument("--use-dilation", type=int, default=0)
-    po.add_argument("--det-limit-side-len", type=int, default=1600)
-    po.add_argument("--upscale-factor", type=float, default=1.6)
+    po.add_argument("--det-limit-side-len", type=int, default=1920)
+    po.add_argument("--upscale-factor", type=float, default=1.0)
     po.add_argument("--save-debug-images", type=int, default=1)
     po.add_argument("--copy-images", type=int, default=1)
     po.add_argument("--save-every-images", type=int, default=10, help="Flush CSV every N images")

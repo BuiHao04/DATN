@@ -8,7 +8,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from pipeline.core.gcn_classifier import InvoiceGCN, build_edge_index
+from pipeline.core.gcn_classifier import InvoiceGCN, build_edge_index, infer_gcn_hparams_from_state
 from pipeline.core.schema import LABEL_MAP
 
 
@@ -27,8 +27,19 @@ class GCNEvaluationService:
         in_channels = len(samples[0]["x"][0])
         out_channels = max(max(s["y"]) for s in samples) + 1
 
-        model = InvoiceGCN(in_channels=in_channels, hidden_channels=64, out_channels=out_channels)
-        model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
+        state = torch.load(checkpoint_path, map_location="cpu")
+        ckpt_in, hidden_channels, ckpt_out, num_layers = infer_gcn_hparams_from_state(state, in_channels, out_channels)
+        if ckpt_in != in_channels:
+            raise ValueError(f"Checkpoint feature dim {ckpt_in} != dataset feature dim {in_channels}")
+        out_channels = ckpt_out
+        model = InvoiceGCN(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            out_channels=out_channels,
+            num_layers=num_layers,
+            dropout=0.0,
+        )
+        model.load_state_dict(state)
         model.eval()
 
         conf = [[0 for _ in range(out_channels)] for _ in range(out_channels)]
@@ -65,11 +76,16 @@ class GCNEvaluationService:
         macro_p = 0.0
         macro_r = 0.0
         macro_f1 = 0.0
+        supported_macro_f1 = 0.0
+        supported_class_count = 0
+        weighted_f1 = 0.0
+        weighted_support = 0
 
         for c in range(out_channels):
             tp = conf[c][c]
             fp = sum(conf[r][c] for r in range(out_channels) if r != c)
             fn = sum(conf[c][k] for k in range(out_channels) if k != c)
+            support = tp + fn
             precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
             recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
             f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
@@ -78,6 +94,7 @@ class GCNEvaluationService:
                 "tp": tp,
                 "fp": fp,
                 "fn": fn,
+                "support": support,
                 "precision": precision,
                 "recall": recall,
                 "f1": f1,
@@ -85,6 +102,11 @@ class GCNEvaluationService:
             macro_p += precision
             macro_r += recall
             macro_f1 += f1
+            if support > 0:
+                supported_macro_f1 += f1
+                supported_class_count += 1
+                weighted_f1 += f1 * support
+                weighted_support += support
 
         denom = max(out_channels, 1)
         report: dict[str, Any] = {
@@ -95,6 +117,9 @@ class GCNEvaluationService:
                 "precision_macro": macro_p / denom,
                 "recall_macro": macro_r / denom,
                 "f1_macro": macro_f1 / denom,
+                "f1_supported_macro": supported_macro_f1 / max(supported_class_count, 1),
+                "f1_weighted": weighted_f1 / max(weighted_support, 1),
+                "supported_classes": supported_class_count,
                 "loss_avg": total_loss / max(len(samples), 1),
                 "inference_time_ms_total": total_infer_ms,
                 "inference_time_ms_avg_per_graph": total_infer_ms / max(len(samples), 1),
@@ -112,4 +137,3 @@ class GCNEvaluationService:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(out)
-

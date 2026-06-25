@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Set up cuDNN 8 for the GPU PaddleOCR detector.
+# Legacy helper for the old PaddleOCR 2.x GPU detector.
+#
+# The project now defaults to PaddleOCR 3.7 / PP-OCRv6 on PaddlePaddle 3.2.1 CPU,
+# while VietOCR still uses torch CUDA for recognition. Do not run this script unless
+# you intentionally want to roll back to the old paddlepaddle-gpu==2.6.2 stack.
 #
 # Why this is needed:
 #   The GPU Paddle build (paddlepaddle-gpu==2.6.2, cu118) links against cuDNN 8, but
@@ -17,6 +21,13 @@
 #   bash scripts/setup_paddle_gpu_cudnn8.sh
 #   # then (re)start the backend; batch OCR will run detection on the GPU.
 set -euo pipefail
+
+if [[ "${ALLOW_LEGACY_PADDLE_GPU_SETUP:-0}" != "1" ]]; then
+  echo "This script is legacy and would install paddlepaddle-gpu==2.6.2."
+  echo "Current OCR stack expects paddleocr==3.7.0 + paddlepaddle==3.2.1."
+  echo "Set ALLOW_LEGACY_PADDLE_GPU_SETUP=1 only if you really want the old stack."
+  exit 1
+fi
 
 PY="${PYTHON:-$(command -v python)}"
 DEST="${OCR_PADDLE_CUDNN8_DIR:-$HOME/.local/lib/paddle_cudnn8}"

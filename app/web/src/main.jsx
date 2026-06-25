@@ -363,6 +363,17 @@ const OCR_HELP = {
 };
 
 function shortName(s){s=String(s||""); return s.length>26?`${s.slice(0,24)}...`:s;}
+function inferSafeStem(path){
+  const raw = String(path || "").split(/[\\/]/).pop() || "image";
+  return raw.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "image";
+}
+function inferOutputPathsForImage(path){
+  const stem = inferSafeStem(path);
+  return {
+    ocr_debug_image: `outputs/infer/ocr_boxes_${stem}.jpg`,
+    output_json: `outputs/infer/gcn_infer_${stem}.json`,
+  };
+}
 
 function TrainField({label, hint, children, help}){
   return (
@@ -436,13 +447,13 @@ function App(){
     output_dir:"data/labeling_stage_b",
     lang:"vi",
     ocr_engine:"vietocr",
-    det_db_thresh:0.25,
-    det_db_box_thresh:0.6,
-    det_db_unclip_ratio:1.25,
-    drop_score:0.45,
+    det_db_thresh:0.20,
+    det_db_box_thresh:0.45,
+    det_db_unclip_ratio:1.80,
+    drop_score:0.25,
     use_dilation:0,
-    det_limit_side_len:1600,
-    upscale_factor:1.6,
+    det_limit_side_len:1920,
+    upscale_factor:1.0,
     save_debug_images:1,
     copy_images:1,
     save_every_images:10,
@@ -471,7 +482,7 @@ function App(){
   const [activeNodeIndex,setActiveNodeIndex]=useState(-1);
   const [imageNatural,setImageNatural]=useState({w:1,h:1});
   const [missingOnly,setMissingOnly]=useState(false);
-  const [galleryDir,setGalleryDir]=useState("data/labeling_top1000");
+  const [galleryDir,setGalleryDir]=useState("data/labeling_top1000_ppocrv6");
   const [galleryItems,setGalleryItems]=useState([]);
   const [galleryTotal,setGalleryTotal]=useState(0);
   const [galleryPage,setGalleryPage]=useState(1);
@@ -490,13 +501,13 @@ function App(){
   const [inferNodeFilter,setInferNodeFilter]=useState("all");
   const [inferActiveNode,setInferActiveNode]=useState(-1);
   const [trainA,setTrainA]=useState({dataset_json:"data/stage_a_dataset.json",val_dataset_json:"",checkpoint:"outputs/checkpoints/gcn_stage_a.pt",init_checkpoint:"",epochs:30,lr:0.001,early_stop_patience:0});
-  const [trainB,setTrainB]=useState({dataset_json:"data/stage_b_vi_dataset.json",val_dataset_json:"",base_checkpoint:"outputs/checkpoints/gcn_stage_a.pt",checkpoint:"outputs/checkpoints/gcn_stage_b.pt",epochs:20,lr:0.0005,early_stop_patience:0});
+  const [trainB,setTrainB]=useState({dataset_json:"data/labeling_top1000_ppocrv6/stage_b_train_v6domain_nodeonly.json",val_dataset_json:"data/labeling_top1000_ppocrv6/stage_b_val_v6domain_nodeonly.json",base_checkpoint:"outputs/checkpoints/gcn_top1000_ppocrv6_v6domain_nodeonly_ce.best.pt",checkpoint:"outputs/checkpoints/gcn_top1000_ppocrv6_v6domain_nodeonly_ce.pt",epochs:180,lr:0.0005,early_stop_patience:25});
   const [trainFull,setTrainFull]=useState({stage_a_json:"data/stage_a_dataset.json",stage_b_json:"data/stage_b_vi_dataset.json",stage_a_ckpt:"outputs/checkpoints/gcn_stage_a.pt",stage_b_ckpt:"outputs/checkpoints/gcn_stage_b.pt",stage_a_epochs:30,stage_b_epochs:20,stage_a_lr:0.001,stage_b_lr:0.0005,init_checkpoint:"",eval_json:"",output_eval:"outputs/gcn_eval_report.json"});
   const [splitStageB,setSplitStageB]=useState({
-    input_json:"data/stage_b_vi_dataset.json",
-    output_train_json:"data/stage_b_train.json",
-    output_val_json:"data/stage_b_val.json",
-    output_test_json:"data/stage_b_test.json",
+    input_json:"data/labeling_top1000_ppocrv6/stage_b_vi_dataset_v4sparse.json",
+    output_train_json:"data/labeling_top1000_ppocrv6/stage_b_train_v4sparse.json",
+    output_val_json:"data/labeling_top1000_ppocrv6/stage_b_val_v4sparse.json",
+    output_test_json:"data/labeling_top1000_ppocrv6/stage_b_test_v4sparse.json",
     train_ratio:0.7,
     val_ratio:0.15,
     test_ratio:0.15,
@@ -504,30 +515,38 @@ function App(){
   });
   const [splitResult,setSplitResult]=useState(null);
   const [stageBEval,setStageBEval]=useState({
-    dataset_json:"data/stage_b_test.json",
-    checkpoint:"outputs/checkpoints/gcn_stage_b.pt",
-    output_eval:"outputs/gcn_stage_b_test_report.json",
+    dataset_json:"data/labeling_top1000_ppocrv6/stage_b_test_v6domain_nodeonly.json",
+    checkpoint:"outputs/checkpoints/gcn_top1000_ppocrv6_v6domain_nodeonly_ce.best.pt",
+    output_eval:"outputs/gcn_top1000_ppocrv6_v6domain_nodeonly_ce_test_report.json",
   });
   const [inferOne,setInferOne]=useState({
     image:"",
     lang:"vi",
     ocr_engine:"vietocr",
-    checkpoint:"outputs/checkpoints/gcn_stage_b.pt",
+    checkpoint:"outputs/checkpoints/gcn_top1000_ppocrv6_v6domain_nodeonly_ce.best.pt",
     ocr_debug_image:"outputs/ocr_boxes_single.jpg",
     output_json:"outputs/gcn_infer_single.json",
+    reuse_ocr_json:0,
+    det_db_thresh:0.20,
+    det_db_box_thresh:0.45,
+    det_db_unclip_ratio:1.80,
+    drop_score:0.25,
+    use_dilation:0,
+    det_limit_side_len:1920,
+    upscale_factor:1.0,
   });
   const [inferUploadFile,setInferUploadFile]=useState(null);
   const [singleCheck,setSingleCheck]=useState({
     image:"",
     lang:"vi",
     ocr_engine:"vietocr",
-    det_db_thresh:0.25,
-    det_db_box_thresh:0.6,
-    det_db_unclip_ratio:1.25,
-    drop_score:0.45,
+    det_db_thresh:0.20,
+    det_db_box_thresh:0.45,
+    det_db_unclip_ratio:1.80,
+    drop_score:0.25,
     use_dilation:0,
-    det_limit_side_len:1600,
-    upscale_factor:1.6,
+    det_limit_side_len:1920,
+    upscale_factor:1.0,
     llm_model:"gpt-4.1-mini",
     output_dir:"data/single_image_check",
     save_debug_image:1,
@@ -551,26 +570,26 @@ function App(){
     if(preset==="tight"){
       setSingleCheck(prev=>({
         ...prev,
-        det_db_thresh:0.25,
-        det_db_box_thresh:0.62,
-        det_db_unclip_ratio:1.18,
-        drop_score:0.45,
+        det_db_thresh:0.22,
+        det_db_box_thresh:0.52,
+        det_db_unclip_ratio:1.45,
+        drop_score:0.30,
         use_dilation:0,
-        det_limit_side_len:1600,
-        upscale_factor:1.8,
+        det_limit_side_len:1920,
+        upscale_factor:1.0,
       }));
       return;
     }
     if(preset==="balanced"){
       setSingleCheck(prev=>({
         ...prev,
-        det_db_thresh:0.25,
-        det_db_box_thresh:0.58,
-        det_db_unclip_ratio:1.25,
-        drop_score:0.40,
+        det_db_thresh:0.20,
+        det_db_box_thresh:0.45,
+        det_db_unclip_ratio:1.80,
+        drop_score:0.25,
         use_dilation:0,
-        det_limit_side_len:1536,
-        upscale_factor:1.6,
+        det_limit_side_len:1920,
+        upscale_factor:1.0,
       }));
       return;
     }
@@ -582,7 +601,7 @@ function App(){
       drop_score:0.35,
       use_dilation:1,
       det_limit_side_len:1792,
-      upscale_factor:1.8,
+      upscale_factor:1.2,
     }));
   };
 
@@ -608,11 +627,17 @@ function App(){
   useEffect(()=>{
     if(knownCheckpointFiles.length===0) return;
     const hasCurrent = knownCheckpointFiles.includes(trainB.base_checkpoint);
-    const cordCkpt = knownCheckpointFiles.find(x=>String(x).endsWith("gcn_cord.pt"));
-    if(!hasCurrent && cordCkpt){
-      setTrainB(prev=>prev.base_checkpoint===trainB.base_checkpoint ? {...prev, base_checkpoint: cordCkpt} : prev);
-      setStageBEval(prev=>!knownCheckpointFiles.includes(prev.checkpoint) ? {...prev, checkpoint: cordCkpt} : prev);
-      setInferOne(prev=>!knownCheckpointFiles.includes(prev.checkpoint) ? {...prev, checkpoint: cordCkpt} : prev);
+    const preferredCkpt = knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_v6domain_nodeonly_ce.best.pt"))
+      || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_v5nodeonly_ce.best.pt"))
+      || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_ctx128_focal.best.pt"))
+      || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_ctx128.best.pt"))
+      || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_auto.best.pt"))
+      || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_v6.best.pt"))
+      || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_cord.pt"));
+    if(!hasCurrent && preferredCkpt){
+      setTrainB(prev=>prev.base_checkpoint===trainB.base_checkpoint ? {...prev, base_checkpoint: preferredCkpt} : prev);
+      setStageBEval(prev=>!knownCheckpointFiles.includes(prev.checkpoint) ? {...prev, checkpoint: preferredCkpt} : prev);
+      setInferOne(prev=>!knownCheckpointFiles.includes(prev.checkpoint) ? {...prev, checkpoint: preferredCkpt} : prev);
     }
   },[knownCheckpointFiles]);
 
@@ -678,12 +703,51 @@ function App(){
   },[singleInspect]);
   const statusClass=(s)=>s==="success"?"success":s==="failed"?"failed":s==="running"?"running":s==="queued"?"queued":s==="stopping"?"queued":s==="stopped"?"idle":"idle";
   const lastLog=(j)=>{if(!j) return "Chưa có log"; const t=(j.stderr||j.stdout||"").trim(); if(!t) return "Job đã tạo, đang chờ log..."; return t.split(/\r?\n/).slice(-25).join("\n");};
+  const dsLogText=lastLog(dsJob);
+  const dsInvalidLabelMatch=dsLogText.match(/Có\s+(\d+)\s+dòng label sai, đã bỏ qua/);
+  const dsInvalidLabelNotice=dsInvalidLabelMatch ? `Có ${dsInvalidLabelMatch[1]} dòng label sai, đã bỏ qua.` : "";
 
-  const apiPost=async(url,body)=>{const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const d=await r.json();setOut(JSON.stringify(d,null,2));await loadJobs();return d;};
+  const apiPost=async(url,body)=>{
+    try{
+      const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const text=await r.text();
+      let d;
+      try{ d=text ? JSON.parse(text) : {}; }catch{ d={status:"error",raw:text}; }
+      if(!r.ok){
+        const err={status:"failed",url,status_code:r.status,detail:d?.detail||d};
+        setOut(JSON.stringify(err,null,2));
+        await loadJobs();
+        return err;
+      }
+      setOut(JSON.stringify(d,null,2));
+      await loadJobs();
+      return d;
+    }catch(e){
+      const err={status:"failed",url,error:String(e?.message||e)};
+      setOut(JSON.stringify(err,null,2));
+      await loadJobs();
+      return err;
+    }
+  };
   const setOutSummary=(title, data)=>setOut(JSON.stringify({title, ...data}, null, 2));
   const upload=async()=>{if(!files.length) return; const fd=new FormData(); files.forEach(f=>fd.append("files",f)); if(subdir.trim()) fd.append("subdir",subdir.trim()); const r=await fetch("/api/files/upload-images",{method:"POST",body:fd}); const d=await r.json(); setOut(JSON.stringify(d,null,2)); await loadRecentRaw(); await loadJobs();};
   const clearOldFiles=async()=>{const d=await apiPost("/api/files/clear-stage-b-raw-images",{}); setFiles([]); setSubdir(""); setPickMode("files"); setPickerKey(v=>v+1); await loadRecentRaw(); return d;};
-  const runOcrBatch=async()=>{await apiPost("/api/pipeline/prepare-ocr-labeling",ocr);};
+  const runOcrBatch=async()=>{
+    if(!String(ocr.input_dir||"").trim()){
+      setOut(JSON.stringify({status:"blocked",stage:"prepare_ocr_labeling",issues:["Thiếu thư mục ảnh đầu vào."]},null,2));
+      return;
+    }
+    if(!String(ocr.output_dir||"").trim()){
+      setOut(JSON.stringify({status:"blocked",stage:"prepare_ocr_labeling",issues:["Thiếu thư mục output OCR."]},null,2));
+      return;
+    }
+    if(Number(ocr.overwrite_existing)===1){
+      const ok=window.confirm(`Bước 2 đang ở chế độ OCR lại từ đầu và sẽ xóa output cũ trong ${ocr.output_dir}. Tiếp tục chạy?`);
+      if(!ok) return;
+    }
+    setOut(JSON.stringify({status:"starting",stage:"prepare_ocr_labeling",input_dir:ocr.input_dir,output_dir:ocr.output_dir},null,2));
+    await apiPost("/api/pipeline/prepare-ocr-labeling",ocr);
+  };
   const stopOcrBatch=async()=>{
     if(!ocrJob?.id) return;
     const r=await fetch(`/api/jobs/${ocrJob.id}/stop`,{method:"POST"});
@@ -792,7 +856,7 @@ function App(){
     await loadJobs();
     setLabelHint(`Đã gửi yêu cầu dừng AI top ảnh cho job ${galleryAiJob.id}.`);
   };
-  const galleryBaseDir=()=>String(galleryDir||"data/labeling_top1000").replace(/[\\/]+$/,"");
+  const galleryBaseDir=()=>String(galleryDir||"data/labeling_top1000_ppocrv6").replace(/[\\/]+$/,"");
   const galleryGraphJson=()=>`${galleryBaseDir()}/stage_b_vi_dataset.json`;
   const galleryTrainJson=()=>`${galleryBaseDir()}/stage_b_train.json`;
   const galleryValJson=()=>`${galleryBaseDir()}/stage_b_val.json`;
@@ -823,10 +887,13 @@ function App(){
       setLabelHint(`Chưa compile được top ảnh vì còn ${v?.empty_label_count ?? "?"} dòng thiếu nhãn.`);
       return;
     }
-    const d=await apiPost("/api/pipeline/preprocess-gcn-dataset",{input_csv:csvPath,output_json:graphPath});
+    const preprocessUrl=splitAfter ? "/api/pipeline/preprocess-gcn-dataset-now" : "/api/pipeline/preprocess-gcn-dataset";
+    const d=await apiPost(preprocessUrl,{input_csv:csvPath,output_json:graphPath});
     if(d){
-      setLabelHint(`Đã compile dataset graph từ top ảnh: ${graphPath}.`);
-      setOutSummary("gallery_preprocess_gcn_dataset",{input_csv:csvPath,output_json:graphPath});
+      const skippedLabels = d?.meta?.skipped_invalid_label_rows || 0;
+      const skippedNote = skippedLabels ? ` Có ${skippedLabels} dòng label sai, đã bỏ qua.` : "";
+      setLabelHint(`Đã compile dataset graph từ top ảnh: ${graphPath}.${skippedNote}`);
+      setOutSummary("gallery_preprocess_gcn_dataset",{input_csv:csvPath,output_json:graphPath,meta:d?.meta});
       applyGalleryOutputsToForms(graphPath, null);
       await loadTrainFileOptions();
     }
@@ -876,6 +943,13 @@ function App(){
       return;
     }
     await apiPost("/api/pipeline/train-gcn-stage-b", {...trainB, val_dataset_json: trainB.val_dataset_json || null});
+  };
+  const stopTrainB=async()=>{
+    if(!trainBJob?.id) return;
+    const r=await fetch(`/api/jobs/${trainBJob.id}/stop`,{method:"POST"});
+    const d=await r.json();
+    setOut(JSON.stringify(d,null,2));
+    await loadJobs();
   };
   const applySplitOutputsToForms=(outputs)=>{
     if(!outputs) return;
@@ -935,9 +1009,17 @@ function App(){
     const d = await r.json();
     setOut(JSON.stringify(d,null,2));
     if(r.ok && d.files?.[0]){
-      setInferOne(prev=>({...prev,image:d.files[0]}));
+      const paths = inferOutputPathsForImage(d.files[0]);
+      setInferOne(prev=>({...prev,image:d.files[0], ...paths}));
+      setInferReport(null);
       await loadRecentRaw();
     }
+  };
+  const setInferImagePath=(image)=>{
+    const paths = inferOutputPathsForImage(image);
+    setInferOne(prev=>({...prev,image, ...paths}));
+    setInferReport(null);
+    setInferActiveNode(-1);
   };
   const runInferOne=async()=>{
     if(!String(inferOne.image||"").trim()){
@@ -948,20 +1030,29 @@ function App(){
       setOut(JSON.stringify({status:"blocked",stage:"gcn_infer",issues:["Thiếu checkpoint Stage B để infer."]},null,2));
       return;
     }
+    const paths = inferOutputPathsForImage(inferOne.image);
+    const sharedOcrConfig = {
+      lang: ocr.lang,
+      ocr_engine: ocr.ocr_engine,
+      det_db_thresh: Number(ocr.det_db_thresh),
+      det_db_box_thresh: Number(ocr.det_db_box_thresh),
+      det_db_unclip_ratio: Number(ocr.det_db_unclip_ratio),
+      drop_score: Number(ocr.drop_score),
+      use_dilation: Number(ocr.use_dilation),
+      det_limit_side_len: Number(ocr.det_limit_side_len),
+      upscale_factor: Number(ocr.upscale_factor),
+    };
+    const payload = {...inferOne, ...sharedOcrConfig, ...paths};
     setInferReport(null);
-    await apiPost("/api/pipeline/gcn-infer", inferOne);
+    setInferActiveNode(-1);
+    setInferOne(payload);
+    await apiPost("/api/pipeline/gcn-infer", payload);
   };
   const loadInferReport=async()=>{
     const targetPath = inferCurrentOutputJson;
     const d = await loadJsonOutput(targetPath);
     if(d){
       setInferReport(d);
-      if(targetPath && targetPath !== inferOne.output_json){
-        setInferOne(prev=>({...prev, output_json: targetPath}));
-      }
-      if(inferJob?.args?.ocr_debug_image && inferJob.args.ocr_debug_image !== inferOne.ocr_debug_image){
-        setInferOne(prev=>({...prev, ocr_debug_image: inferJob.args.ocr_debug_image}));
-      }
     }
   };
   const uploadSingleCheckImage=async()=>{
@@ -1388,9 +1479,15 @@ function App(){
     }
     if(String(trainB.base_checkpoint||"").trim() && !knownCheckpointSet.has(trainB.base_checkpoint)){
       issues.push(`Không tìm thấy checkpoint nền: ${trainB.base_checkpoint}`);
-      const cordCkpt = knownCheckpointFiles.find(x=>String(x).endsWith("gcn_cord.pt"));
-      if(cordCkpt){
-        notes.push(`Bạn có thể dùng checkpoint có sẵn: ${cordCkpt}`);
+      const suggestedCkpt = knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_v6domain_nodeonly_ce.best.pt"))
+        || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_v5nodeonly_ce.best.pt"))
+        || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_ctx128_focal.best.pt"))
+        || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_ctx128.best.pt"))
+        || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_auto.best.pt"))
+        || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_v6.best.pt"))
+        || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_cord.pt"));
+      if(suggestedCkpt){
+        notes.push(`Bạn có thể dùng checkpoint có sẵn: ${suggestedCkpt}`);
       }
     }
     if(String(trainB.checkpoint||"").trim() && !knownCheckpointSet.has(trainB.checkpoint)){
@@ -1412,12 +1509,12 @@ function App(){
     return Object.entries(inv);
   },[inferReport]);
   const inferCurrentOutputJson = useMemo(
-    ()=> String(inferJob?.args?.output_json || inferOne.output_json || "").trim(),
-    [inferJob, inferOne.output_json]
+    ()=> String(inferOne.output_json || "").trim(),
+    [inferOne.output_json]
   );
   const inferCurrentDebugImage = useMemo(
-    ()=> String(inferJob?.args?.ocr_debug_image || inferReport?.ocr_boxes_image || inferOne.ocr_debug_image || "").trim(),
-    [inferJob, inferReport, inferOne.ocr_debug_image]
+    ()=> String(inferReport?.ocr_boxes_image || inferOne.ocr_debug_image || "").trim(),
+    [inferReport, inferOne.ocr_debug_image]
   );
   const inferImageVersion = useMemo(
     ()=> encodeURIComponent(String(inferJob?.id || inferJob?.updated_at || inferJob?.created_at || inferCurrentOutputJson || "infer")),
@@ -1988,6 +2085,7 @@ function App(){
                 <div className="actions" style={{marginTop:12}}>
                   <div className="tiny">POST /api/pipeline/train-gcn-stage-b</div>
                   <button className="btn primary" onClick={runTrainB} title={[...stageBValidation.issues, ...stageBPathChecks.issues].length ? [...stageBValidation.issues, ...stageBPathChecks.issues].join(" | ") : "Cấu hình hợp lệ, có thể bắt đầu train"}>Bắt đầu train Stage B</button>
+                  {trainBJob && ["queued","running","stopping"].includes(trainBJob.status) && <button className="btn" onClick={stopTrainB}>Dừng train Stage B</button>}
                 </div>
                 <div className="cards" style={{marginTop:12}}>
                   <div className="card"><div className="k">Trạng thái Stage B</div><div className="v" style={{fontSize:18}}>{(trainBJob?.status||"idle").toUpperCase()}</div></div>
@@ -2124,7 +2222,7 @@ function App(){
                   <div className="step-body">
                     <div className="field-grid">
                       <TrainField label="Ảnh đã có trong project" hint="Có thể chọn luôn ảnh đã upload ở bước chuẩn bị dữ liệu.">
-                        <FileSelect value={inferOne.image} onChange={(v)=>setInferOne({...inferOne,image:v})} options={allRawImages} placeholder="-- chọn ảnh đã có --" />
+                        <FileSelect value={inferOne.image} onChange={setInferImagePath} options={allRawImages} placeholder="-- chọn ảnh đã có --" />
                       </TrainField>
                       <TrainField label="Checkpoint dùng để infer" hint="Checkpoint Stage B sẽ dùng để gán nhãn cho các node OCR trên ảnh này.">
                         <FileSelect value={inferOne.checkpoint} onChange={(v)=>setInferOne({...inferOne,checkpoint:v})} options={knownCheckpointFiles} placeholder="-- chọn checkpoint infer --" />
@@ -2176,6 +2274,9 @@ function App(){
                         <div className="kv" style={{marginTop:10}}>
                           <div>Precision macro</div><div>{(evalMetrics.precision_macro||0).toFixed(4)}</div>
                           <div>Recall macro</div><div>{(evalMetrics.recall_macro||0).toFixed(4)}</div>
+                          <div>F1 weighted</div><div>{(evalMetrics.f1_weighted||0).toFixed(4)}</div>
+                          <div>F1 supported macro</div><div>{(evalMetrics.f1_supported_macro||0).toFixed(4)}</div>
+                          <div>Số lớp có mẫu test</div><div>{evalMetrics.supported_classes||0}</div>
                           <div>Số node test</div><div>{evalMetrics.num_nodes||0}</div>
                           <div>Thời gian infer TB / graph</div><div>{(evalMetrics.inference_time_ms_avg_per_graph||0).toFixed(2)} ms</div>
                         </div>
@@ -2187,6 +2288,7 @@ function App(){
                                 <th>TP</th>
                                 <th>FP</th>
                                 <th>FN</th>
+                                <th>Support</th>
                                 <th>Precision</th>
                                 <th>Recall</th>
                                 <th>F1</th>
@@ -2199,6 +2301,7 @@ function App(){
                                   <td>{row.tp}</td>
                                   <td>{row.fp}</td>
                                   <td>{row.fn}</td>
+                                  <td>{row.support ?? ((row.tp || 0) + (row.fn || 0))}</td>
                                   <td>{Number(row.precision||0).toFixed(4)}</td>
                                   <td>{Number(row.recall||0).toFixed(4)}</td>
                                   <td>{Number(row.f1||0).toFixed(4)}</td>
@@ -2239,13 +2342,13 @@ function App(){
                           <div className="card"><div className="k">Classifier mode</div><div className="v" style={{fontSize:14}}>{shortName(inferReport.classifier_mode||"-")}</div></div>
                           <div className="card"><div className="k">Số node OCR</div><div className="v">{inferReport.graph?.num_nodes||0}</div></div>
                           <div className="card"><div className="k">Số cạnh graph</div><div className="v">{inferReport.graph?.num_edges||0}</div></div>
-                          <div className="card"><div className="k">Node bị GCN đổi nhãn</div><div className="v">{inferChangedCount}</div></div>
+                          <div className="card"><div className="k">Nguồn OCR</div><div className="v" style={{fontSize:14}}>{shortName(inferReport.ocr_source||"rerun_ocr")}</div></div>
                         </div>
                         <div className="metrics-grid" style={{marginTop:10}}>
                           <div className="card"><div className="k">Trường invoice bị đổi</div><div className="v">{inferFieldDiffRows.length}</div></div>
                           <div className="card"><div className="k">Tỉ lệ node bị đổi</div><div className="v">{inferReport.graph?.num_nodes ? `${((inferChangedCount / inferReport.graph.num_nodes) * 100).toFixed(1)}%` : "0%"}</div></div>
                           <div className="card"><div className="k">Kiểu chuyển nhãn</div><div className="v">{inferTransitionRows.length}</div></div>
-                          <div className="card"><div className="k">Nhãn đầu ra khác `Khác`</div><div className="v">{inferPredictedLabelSummary.filter(([lb])=>lb!=="OTHER").length}</div></div>
+                          <div className="card"><div className="k">Node bị GCN đổi nhãn</div><div className="v">{inferChangedCount}</div></div>
                         </div>
                         <div className="step" style={{marginTop:10}}>
                           <div className="step-head"><h3>GCN đã thay đổi trường nào trong invoice cuối?</h3></div>
@@ -2355,6 +2458,7 @@ function App(){
                                 <div className="node-detail-grid">
                                   <div>OCR text</div><div>{inferActiveNodeData.text}</div>
                                   <div>Baseline rule</div><div>{labelText(inferActiveNodeData.rule_label)}</div>
+                                  <div>GCN thô</div><div>{labelText(inferActiveNodeData.raw_gcn_label)} ({Number(inferActiveNodeData.gcn_confidence||0).toFixed(3)})</div>
                                   <div>Nhãn sau GCN</div><div>{labelText(inferActiveNodeData.predicted_label)}</div>
                                 <div>GCN có đổi không?</div><div>{inferActiveNodeData.changed_by_gcn ? "Có, GCN đã đổi nhãn" : "Không, GCN giữ nguyên"}</div>
                                 <div>Số hàng xóm graph</div><div>{(inferActiveNodeData.neighbors||[]).length}</div>
@@ -2372,7 +2476,8 @@ function App(){
                                     <th>Node</th>
                                     <th>Text</th>
                                     <th>Rule</th>
-                                    <th>GCN</th>
+                                    <th>GCN thô</th>
+                                    <th>Nhãn cuối</th>
                                     <th>GCN đổi?</th>
                                     <th>Score OCR</th>
                                     <th>Số hàng xóm</th>
@@ -2384,6 +2489,7 @@ function App(){
                                       <td>{row.node_id}</td>
                                       <td>{row.text}</td>
                                       <td>{labelText(row.rule_label)}</td>
+                                      <td>{labelText(row.raw_gcn_label)} ({Number(row.gcn_confidence||0).toFixed(2)})</td>
                                       <td>{labelText(row.predicted_label)}</td>
                                       <td className={row.changed_by_gcn ? "change-good" : "change-muted"}>{row.changed_by_gcn ? "Có" : "Không"}</td>
                                       <td>{Number(row.confidence||0).toFixed(3)}</td>
@@ -2541,7 +2647,7 @@ function App(){
               <div className="step-body">
                 <div className="p">Xem trực tiếp các ảnh OCR tốt nhất đã chọn để tự đánh giá chất lượng trước khi gán nhãn. Sắp theo điểm OCR trung bình hoặc số node.</div>
                 <div className="row" style={{gridTemplateColumns:"1fr 170px 110px 110px auto auto auto auto auto",marginTop:8,alignItems:"center"}}>
-                  <input className="input" value={galleryDir} onChange={e=>setGalleryDir(e.target.value)} placeholder="thư mục, vd data/labeling_top1000" />
+                  <input className="input" value={galleryDir} onChange={e=>setGalleryDir(e.target.value)} placeholder="thư mục, vd data/labeling_top1000_ppocrv6" />
                   <select className="input" value={gallerySort} onChange={e=>setGallerySort(e.target.value)}>
                     <option value="score_desc">Điểm OCR cao → thấp</option>
                     <option value="score_asc">Điểm OCR thấp → cao</option>
@@ -2966,7 +3072,8 @@ function App(){
                   </div>
                 </div>
                 <div className="row" style={{gridTemplateColumns:"1fr auto",marginTop:10}}><div className="tiny">POST /api/pipeline/preprocess-gcn-dataset</div><button className="btn dark" onClick={runDatasetCompile}>Compile dataset</button></div>
-                <div className="term" style={{marginTop:8}}><h4>LOG BƯỚC 3 (THỰC TẾ)</h4><pre>{lastLog(dsJob)}</pre></div>
+                {dsInvalidLabelNotice && <div className="alert warn" style={{marginTop:8}}><div className="alert-title">{dsInvalidLabelNotice}</div><div className="tiny">Các dòng hợp lệ vẫn được build vào dataset. Xem log bên dưới để biết row number, doc_id, text và label lỗi.</div></div>}
+                <div className="term" style={{marginTop:8}}><h4>LOG BƯỚC 3 (THỰC TẾ)</h4><pre>{dsLogText}</pre></div>
               </div>
             </div>
 

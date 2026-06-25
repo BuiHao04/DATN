@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 from loguru import logger
 
-from pipeline.core.ocr_engine import get_last_ocr_runtime_info, run_ocr_with_processed
+from pipeline.core.ocr_engine import get_last_ocr_runtime_info, run_ocr_with_processed, temporary_ocr_config
 from pipeline.core.visualize import draw_boxes, draw_boxes_on_array
 
 
@@ -278,121 +278,126 @@ class OCRLabelingPrepService:
                 "failed_images_count": "0",
             }
 
-        for idx, image_path in enumerate(image_paths):
-            if stop_flag_path and stop_flag_path.exists():
-                stopped_early = True
-                logger.warning(
-                    "Stop flag detected before image {}. Flushing current OCR outputs and stopping early.",
-                    image_path.name,
-                )
-                break
+        ocr_batch_context = temporary_ocr_config(ocr_overrides)
+        ocr_batch_context.__enter__()
+        try:
+            for idx, image_path in enumerate(image_paths):
+                if stop_flag_path and stop_flag_path.exists():
+                    stopped_early = True
+                    logger.warning(
+                        "Stop flag detected before image {}. Flushing current OCR outputs and stopping early.",
+                        image_path.name,
+                    )
+                    break
 
-            doc_id = self._build_doc_id(in_dir, image_path)
-            try:
-                image_relpath = str(image_path.relative_to(in_dir)).replace("\\", "/")
-            except ValueError:
-                image_relpath = image_path.name
-            logger.info("OCR [{}/{}]: {}", idx + 1, len(image_paths), image_path.name)
-            try:
-                nodes, processed_image = run_ocr_with_processed(
-                    str(image_path), lang=lang, engine=engine, overrides=ocr_overrides
-                )
-                ocr_runtime = get_last_ocr_runtime_info()
+                doc_id = self._build_doc_id(in_dir, image_path)
+                try:
+                    image_relpath = str(image_path.relative_to(in_dir)).replace("\\", "/")
+                except ValueError:
+                    image_relpath = image_path.name
+                logger.info("OCR [{}/{}]: {}", idx + 1, len(image_paths), image_path.name)
+                try:
+                    nodes, processed_image = run_ocr_with_processed(
+                        str(image_path), lang=lang, engine=engine, overrides=None
+                    )
+                    ocr_runtime = get_last_ocr_runtime_info()
 
-                if copy_images:
-                    target_img = images_out / image_relpath
-                    target_img.parent.mkdir(parents=True, exist_ok=True)
-                    if processed_image is not None:
-                        cv2.imwrite(str(target_img), processed_image)
-                    elif target_img.resolve() != image_path.resolve():
-                        shutil.copy2(image_path, target_img)
-                else:
-                    target_img = image_path
-
-                if save_debug_images:
-                    debug_path = debug_out / f"{doc_id}_boxes.jpg"
-                    if processed_image is not None:
-                        draw_boxes_on_array(processed_image, nodes, str(debug_path))
+                    if copy_images:
+                        target_img = images_out / image_relpath
+                        target_img.parent.mkdir(parents=True, exist_ok=True)
+                        if processed_image is not None:
+                            cv2.imwrite(str(target_img), processed_image)
+                        elif target_img.resolve() != image_path.resolve():
+                            shutil.copy2(image_path, target_img)
                     else:
-                        draw_boxes(str(image_path), nodes, str(debug_path))
+                        target_img = image_path
 
-                json_path = ocr_json_out / f"{doc_id}.json"
-                json_payload = {
-                    "doc_id": doc_id,
-                    "image_name": image_path.name,
-                    "image_relpath": image_relpath,
-                    "image_path": str(target_img),
-                    "ocr_engine": engine,
-                    "ocr_runtime": ocr_runtime,
-                    "lang": lang,
-                    "ocr_config": ocr_overrides or {},
-                    "num_nodes": len(nodes),
-                    "nodes": [
-                        {
-                            "text": n.text,
-                            "score": n.score,
-                            "bbox": [n.x1, n.y1, n.x2, n.y2],
-                            "quad": [[px, py] for px, py in (n.quad or ())],
-                        }
-                        for n in nodes
-                    ],
-                }
-                json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                    if save_debug_images:
+                        debug_path = debug_out / f"{doc_id}_boxes.jpg"
+                        if processed_image is not None:
+                            draw_boxes_on_array(processed_image, nodes, str(debug_path))
+                        else:
+                            draw_boxes(str(image_path), nodes, str(debug_path))
 
-                if not nodes:
-                    empty_ocr_images.append(f"{image_relpath}\tempty_nodes")
-                    logger.warning("OCR returned 0 nodes for {}", image_relpath)
-                    processed_count += 1
-                    if (idx + 1) % save_every_images == 0:
-                        self._write_rows_csv(csv_path, rows)
-                        logger.info(
-                            "Saved batch CSV at {}/{} images (batch={}): {}",
-                            idx + 1,
-                            len(image_paths),
-                            save_every_images,
-                            csv_path,
+                    json_path = ocr_json_out / f"{doc_id}.json"
+                    json_payload = {
+                        "doc_id": doc_id,
+                        "image_name": image_path.name,
+                        "image_relpath": image_relpath,
+                        "image_path": str(target_img),
+                        "ocr_engine": engine,
+                        "ocr_runtime": ocr_runtime,
+                        "lang": lang,
+                        "ocr_config": ocr_overrides or {},
+                        "num_nodes": len(nodes),
+                        "nodes": [
+                            {
+                                "text": n.text,
+                                "score": n.score,
+                                "bbox": [n.x1, n.y1, n.x2, n.y2],
+                                "quad": [[px, py] for px, py in (n.quad or ())],
+                            }
+                            for n in nodes
+                        ],
+                    }
+                    json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+                    if not nodes:
+                        empty_ocr_images.append(f"{image_relpath}\tempty_nodes")
+                        logger.warning("OCR returned 0 nodes for {}", image_relpath)
+                        processed_count += 1
+                        if (idx + 1) % save_every_images == 0:
+                            self._write_rows_csv(csv_path, rows)
+                            logger.info(
+                                "Saved batch CSV at {}/{} images (batch={}): {}",
+                                idx + 1,
+                                len(image_paths),
+                                save_every_images,
+                                csv_path,
+                            )
+                            if failed_images:
+                                self._write_text_lines(failed_images_path, failed_images)
+                            if empty_ocr_images:
+                                self._write_text_lines(empty_ocr_images_path, empty_ocr_images)
+                        continue
+
+                    for n in nodes:
+                        rows.append(
+                            {
+                                "doc_id": doc_id,
+                                "image_relpath": image_relpath,
+                                "text": n.text,
+                                "label": "",  # manual labeling target
+                                "x1": f"{n.x1:.2f}",
+                                "y1": f"{n.y1:.2f}",
+                                "x2": f"{n.x2:.2f}",
+                                "y2": f"{n.y2:.2f}",
+                                "score": f"{n.score:.4f}",
+                            }
                         )
-                        if failed_images:
-                            self._write_text_lines(failed_images_path, failed_images)
-                        if empty_ocr_images:
-                            self._write_text_lines(empty_ocr_images_path, empty_ocr_images)
+                except Exception as exc:
+                    failed_images.append(f"{image_path.name}\t{exc}")
+                    logger.error("OCR failed for {}: {}", image_path, exc)
                     continue
 
-                for n in nodes:
-                    rows.append(
-                        {
-                            "doc_id": doc_id,
-                            "image_relpath": image_relpath,
-                            "text": n.text,
-                            "label": "",  # manual labeling target
-                            "x1": f"{n.x1:.2f}",
-                            "y1": f"{n.y1:.2f}",
-                            "x2": f"{n.x2:.2f}",
-                            "y2": f"{n.y2:.2f}",
-                            "score": f"{n.score:.4f}",
-                        }
+                processed_count += 1
+
+                # Persist progress by image-batch.
+                if (idx + 1) % save_every_images == 0:
+                    self._write_rows_csv(csv_path, rows)
+                    logger.info(
+                        "Saved batch CSV at {}/{} images (batch={}): {}",
+                        idx + 1,
+                        len(image_paths),
+                        save_every_images,
+                        csv_path,
                     )
-            except Exception as exc:
-                failed_images.append(f"{image_path.name}\t{exc}")
-                logger.error("OCR failed for {}: {}", image_path, exc)
-                continue
-
-            processed_count += 1
-
-            # Persist progress by image-batch.
-            if (idx + 1) % save_every_images == 0:
-                self._write_rows_csv(csv_path, rows)
-                logger.info(
-                    "Saved batch CSV at {}/{} images (batch={}): {}",
-                    idx + 1,
-                    len(image_paths),
-                    save_every_images,
-                    csv_path,
-                )
-                if failed_images:
-                    self._write_text_lines(failed_images_path, failed_images)
-                if empty_ocr_images:
-                    self._write_text_lines(empty_ocr_images_path, empty_ocr_images)
+                    if failed_images:
+                        self._write_text_lines(failed_images_path, failed_images)
+                    if empty_ocr_images:
+                        self._write_text_lines(empty_ocr_images_path, empty_ocr_images)
+        finally:
+            ocr_batch_context.__exit__(None, None, None)
 
         self._write_rows_csv(csv_path, rows)
         if failed_images:

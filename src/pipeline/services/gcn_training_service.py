@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -70,6 +71,34 @@ class GCNTrainingService:
         out_channels = max(max(s["y"]) for s in samples) + 1
         return in_channels, out_channels
 
+    def _class_weights(self, samples: list[dict], out_channels: int) -> torch.Tensor:
+        counts = torch.zeros(out_channels, dtype=torch.float32)
+        for sample in samples:
+            for label in sample.get("y", []):
+                if 0 <= int(label) < out_channels:
+                    counts[int(label)] += 1.0
+        counts = torch.clamp(counts, min=1.0)
+        weights = counts.sum() / (counts * out_channels)
+        min_weight = float(os.environ.get("GCN_CLASS_WEIGHT_MIN", "0.25"))
+        max_weight = float(os.environ.get("GCN_CLASS_WEIGHT_MAX", "4.0"))
+        return torch.clamp(weights, min=min_weight, max=max_weight)
+
+    def _loss(
+        self,
+        logits: torch.Tensor,
+        y: torch.Tensor,
+        class_weights: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        gamma = float(os.environ.get("GCN_FOCAL_GAMMA", "0"))
+        label_smoothing = float(os.environ.get("GCN_LABEL_SMOOTHING", "0"))
+        if gamma <= 0:
+            return F.cross_entropy(logits, y, weight=class_weights, label_smoothing=label_smoothing)
+
+        ce = F.cross_entropy(logits, y, weight=class_weights, reduction="none")
+        with torch.no_grad():
+            pt = torch.exp(-F.cross_entropy(logits, y, reduction="none"))
+        return (((1.0 - pt) ** gamma) * ce).mean()
+
     def _load_init_checkpoint_compatible(
         self,
         model: InvoiceGCN,
@@ -116,7 +145,13 @@ class GCNTrainingService:
                 ", ".join(unexpected_keys),
             )
 
-    def _run_epoch_train(self, model: InvoiceGCN, samples: list[dict], optimizer: torch.optim.Optimizer) -> float:
+    def _run_epoch_train(
+        self,
+        model: InvoiceGCN,
+        samples: list[dict],
+        optimizer: torch.optim.Optimizer,
+        class_weights: torch.Tensor | None = None,
+    ) -> float:
         model.train()
         total_loss = 0.0
         for s in samples:
@@ -129,13 +164,19 @@ class GCNTrainingService:
 
             optimizer.zero_grad()
             logits = model(x, edge_index)
-            loss = F.cross_entropy(logits, y)
+            loss = self._loss(logits, y, class_weights=class_weights)
             loss.backward()
             optimizer.step()
             total_loss += float(loss.item())
         return total_loss / max(len(samples), 1)
 
-    def _run_eval(self, model: InvoiceGCN, samples: list[dict], out_channels: int) -> dict[str, float]:
+    def _run_eval(
+        self,
+        model: InvoiceGCN,
+        samples: list[dict],
+        out_channels: int,
+        class_weights: torch.Tensor | None = None,
+    ) -> dict[str, float]:
         model.eval()
         total_loss = 0.0
         conf = [[0 for _ in range(out_channels)] for _ in range(out_channels)]
@@ -150,7 +191,7 @@ class GCNTrainingService:
                 y = torch.tensor(s["y"], dtype=torch.long)
 
                 logits = model(x, edge_index)
-                loss = F.cross_entropy(logits, y)
+                loss = self._loss(logits, y, class_weights=class_weights)
                 total_loss += float(loss.item())
 
                 pred = torch.argmax(logits, dim=1)
@@ -204,11 +245,41 @@ class GCNTrainingService:
         val_samples = self._load_samples(val_dataset_json_path) if val_dataset_json_path else None
         in_channels, out_channels = self._infer_shape(samples)
 
-        model = InvoiceGCN(in_channels=in_channels, hidden_channels=64, out_channels=out_channels)
+        hidden_channels = int(os.environ.get("GCN_HIDDEN_CHANNELS", "64"))
+        num_layers = int(os.environ.get("GCN_NUM_LAYERS", "2"))
+        dropout = float(os.environ.get("GCN_DROPOUT", "0.0"))
+        model = InvoiceGCN(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            out_channels=out_channels,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
         if init_checkpoint:
             logger.info("[{}] Load init checkpoint: {}", stage_name, init_checkpoint)
             self._load_init_checkpoint_compatible(model, init_checkpoint, stage_name)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        weight_decay = float(os.environ.get("GCN_WEIGHT_DECAY", "0"))
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        class_weights = self._class_weights(samples, out_channels)
+        logger.info("[{}] Class weights: {}", stage_name, [round(float(v), 3) for v in class_weights.tolist()])
+        logger.info(
+            "[{}] Loss config: focal_gamma={} label_smoothing={} weight_decay={} class_weight_min={} class_weight_max={}",
+            stage_name,
+            os.environ.get("GCN_FOCAL_GAMMA", "0"),
+            os.environ.get("GCN_LABEL_SMOOTHING", "0"),
+            os.environ.get("GCN_WEIGHT_DECAY", "0"),
+            os.environ.get("GCN_CLASS_WEIGHT_MIN", "0.25"),
+            os.environ.get("GCN_CLASS_WEIGHT_MAX", "4.0"),
+        )
+        logger.info(
+            "[{}] Model config: in_channels={} hidden_channels={} out_channels={} num_layers={} dropout={}",
+            stage_name,
+            in_channels,
+            hidden_channels,
+            out_channels,
+            num_layers,
+            dropout,
+        )
 
         ckpt = Path(checkpoint_path)
         ckpt.parent.mkdir(parents=True, exist_ok=True)
@@ -218,11 +289,11 @@ class GCNTrainingService:
         no_improve = 0
 
         for epoch in range(1, epochs + 1):
-            train_loss = self._run_epoch_train(model, samples, optimizer)
+            train_loss = self._run_epoch_train(model, samples, optimizer, class_weights=class_weights)
             torch.save(model.state_dict(), last_ckpt)
 
             if val_samples:
-                val_metrics = self._run_eval(model, val_samples, out_channels)
+                val_metrics = self._run_eval(model, val_samples, out_channels, class_weights=class_weights)
                 val_score = val_metrics["f1_macro"]
                 improved = val_score > best_score
                 if improved:

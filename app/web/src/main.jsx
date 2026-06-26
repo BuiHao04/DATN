@@ -36,8 +36,10 @@ body{margin:0;background:var(--bg);font-family:Inter,Segoe UI,Arial,sans-serif;c
 .table-wrap{margin-top:6px;border:1px solid #d4d1e0;border-radius:8px;overflow:hidden;background:#fff;max-height:180px;overflow:auto}
 .tbl{width:100%;border-collapse:collapse;font-size:12px}
 .tbl th,.tbl td{padding:5px 7px;border-bottom:1px solid #eceaf4;text-align:left}
-.tbl th{background:#f7f6fc;font-weight:700}
+.tbl th{background:#f7f6fc;font-weight:700;position:sticky;top:0;z-index:1}
 .tbl tr:last-child td{border-bottom:none}
+.tbl td{vertical-align:middle;line-height:1.35}
+.tbl tbody tr:hover{background:#f8faff}
 .path{max-width:560px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .step-upload .step-body{padding:8px 10px}
 .upload-compact{display:grid;grid-template-columns:1fr 210px auto auto;gap:8px;align-items:center}
@@ -83,7 +85,8 @@ body{margin:0;background:var(--bg);font-family:Inter,Segoe UI,Arial,sans-serif;c
 .ocr-box{position:absolute;border:2px solid rgba(48,73,185,.55);background:rgba(48,73,185,.08);cursor:pointer}
 .ocr-box.active{border-color:#ef4444;background:rgba(239,68,68,.12)}
 .node-row{cursor:pointer}
-.node-row.active{background:#eef2ff}
+.node-row.active{background:#e7edff;box-shadow:inset 3px 0 0 #3049b9}
+.node-row.active td:first-child{font-weight:800;color:#3049b9}
 .cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}
 .card{background:#fff;border:1px solid #d4d0e1;border-radius:12px;padding:12px;min-height:96px;display:flex;flex-direction:column;justify-content:space-between}
 .card .k{font-size:12px;color:#6b7280;margin-bottom:6px;line-height:1.35}.card .v{font-size:22px;font-weight:800;line-height:1.1}
@@ -123,23 +126,26 @@ body{margin:0;background:var(--bg);font-family:Inter,Segoe UI,Arial,sans-serif;c
 .image-card img{display:block;width:100%;max-height:420px;object-fit:contain;background:#f7f6fc}
 .scroll-table{max-height:320px;overflow:auto;border:1px solid #d4d1e0;border-radius:8px}
 .empty-state{padding:18px;border:1px dashed #d5d0e2;border-radius:10px;background:#fcfcff;color:#6b7280;font-size:13px}
-.review-shell{display:grid;grid-template-columns:300px 1.15fr .95fr;gap:12px;margin-top:10px}
+.review-shell{display:grid;grid-template-columns:300px minmax(560px,1.35fr) minmax(420px,.9fr);gap:12px;margin-top:10px}
 .review-pane{border:1px solid #d4d1e0;border-radius:12px;background:#fff;overflow:hidden}
 .review-pane-head{padding:10px 12px;border-bottom:1px solid #e8e5f0;background:#faf9ff}
 .review-pane-head h4{margin:0;font-size:15px}
 .review-pane-body{padding:10px 12px}
 .review-list{max-height:820px;overflow:auto}
-.review-image{border:1px solid #ddd8ea;border-radius:12px;background:#f8f7fc;overflow:auto;padding:12px;text-align:center}
-.review-canvas{position:relative;display:inline-block;line-height:0;max-width:100%}
-.review-canvas img{display:block;max-width:100%;height:auto;max-height:680px;background:#f8f7fc}
-.review-overlay{position:absolute;inset:0;pointer-events:none}
+.review-image{border:1px solid #d4d1e0;border-radius:12px;background:linear-gradient(45deg,#f3f2f8 25%,transparent 25%),linear-gradient(-45deg,#f3f2f8 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#f3f2f8 75%),linear-gradient(-45deg,transparent 75%,#f3f2f8 75%);background-size:18px 18px;background-position:0 0,0 9px,9px -9px,-9px 0;overflow:auto;padding:14px;text-align:center;max-height:72vh}
+.review-canvas{position:relative;display:inline-block;line-height:0;max-width:100%;background:#fff;border:1px solid rgba(22,22,31,.12);box-shadow:0 10px 26px rgba(20,24,40,.16)}
+.review-canvas img{display:block;max-width:100%;height:auto;max-height:68vh;background:#f8f7fc}
+.review-overlay{position:absolute;inset:0;pointer-events:auto}
 .review-overlay svg{width:100%;height:100%;display:block}
-.ocr-poly{cursor:pointer;pointer-events:auto}
+.ocr-poly{cursor:pointer;pointer-events:auto;transition:opacity .12s ease}
+.ocr-poly:hover{opacity:.92}
+.ocr-node-tag{paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round;font-size:13px;font-weight:800;fill:#111827;pointer-events:none}
+.ocr-node-tag-bg{fill:#fff;stroke:#ef4444;stroke-width:1.2px;filter:drop-shadow(0 2px 4px rgba(17,24,39,.24));pointer-events:none}
 .review-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
 .review-kpi{border:1px solid #ddd8ea;border-radius:10px;background:#f9f8fe;padding:9px}
 .review-kpi .k{font-size:11px;color:#6b7280;margin-bottom:4px}.review-kpi .v{font-size:18px;font-weight:800}
 .node-filterbar{display:grid;grid-template-columns:1fr 160px 160px;gap:8px;margin-bottom:10px}
-.node-detail{border:1px solid #ddd8ea;border-radius:10px;background:#faf9ff;padding:10px;margin-bottom:10px}
+.node-detail{border:1px solid #d4d1e0;border-radius:10px;background:#fbfbff;padding:10px;margin-bottom:10px;box-shadow:0 1px 0 rgba(32,41,54,.04)}
 .node-detail-grid{display:grid;grid-template-columns:110px 1fr;gap:8px;font-size:12px}
 .node-detail-grid div{padding:4px 0;border-bottom:1px solid #ebe8f3}
 .node-detail-grid div:nth-last-child(-n+2){border-bottom:none}
@@ -459,8 +465,8 @@ function App(){
     save_every_images:10,
     overwrite_existing:1
   });
-  const [dataset,setDataset]=useState({input_csv:"data/labeling_stage_b/nodes_to_label.csv",output_json:"data/stage_b_vi_dataset.json"});
-  const [trainSubset,setTrainSubset]=useState({output_dir:"data/train_stage_b",limit:1000});
+  const [dataset,setDataset]=useState({input_csv:"data/labeling_top1000_ppocrv6/nodes_to_label.csv",output_json:"data/labeling_top1000_ppocrv6/stage_b_vi_dataset.json"});
+  const [trainSubset,setTrainSubset]=useState({output_dir:"data/train_top1000_ppocrv6",limit:1000});
   const [labelRows,setLabelRows]=useState([]);
   const [allowedLabels,setAllowedLabels]=useState(LABELS);
   const [labelHint,setLabelHint]=useState("");
@@ -608,26 +614,33 @@ function App(){
   const loadJobs=async()=>{try{const r=await fetch("/api/jobs");const d=await r.json();setJobs(Array.isArray(d)?d:[]);}catch{setJobs([])}};
   const loadRecentRaw=async()=>{try{const r=await fetch("/api/files/stage-b-raw-images");const d=await r.json();setAllRawImages(d.files||[]);setRecentRaw((d.files||[]).slice(0,10)); if(d.input_dir) setOcr(s=>({...s,input_dir:d.input_dir}));}catch{setAllRawImages([]);setRecentRaw([])}};
   const loadTrainFileOptions=async()=>{
-    try{
-      const [dataRes, ckptRes] = await Promise.all([
-        fetch("/api/files/list?dir=data"),
-        fetch("/api/files/checkpoints"),
-      ]);
+    const loadDataFiles = async()=>{
+      try{
+        const dataRes = await fetch("/api/files/list?dir=data");
       const dataJson = await dataRes.json();
-      const ckptJson = await ckptRes.json();
       setKnownDataFiles((dataJson.files||[]).filter(x=>/\.(json|csv)$/i.test(String(x))));
-      setKnownCheckpointFiles((ckptJson.files||[]).filter(x=>/\.(pt|pth|bin)$/i.test(String(x))));
-    }catch{
+      }catch{
       setKnownDataFiles([]);
+      }
+    };
+    const loadCheckpointFiles = async()=>{
+      try{
+        const ckptRes = await fetch("/api/files/checkpoints");
+        const ckptJson = await ckptRes.json();
+        setKnownCheckpointFiles((ckptJson.files||[]).filter(x=>/\.(pt|pth|bin)$/i.test(String(x))));
+      }catch{
       setKnownCheckpointFiles([]);
-    }
+      }
+    };
+    await Promise.allSettled([loadDataFiles(), loadCheckpointFiles()]);
   };
 
   useEffect(()=>{loadJobs(); loadRecentRaw(); loadTrainFileOptions();},[]);
   useEffect(()=>{
     if(knownCheckpointFiles.length===0) return;
     const hasCurrent = knownCheckpointFiles.includes(trainB.base_checkpoint);
-    const preferredCkpt = knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_v6domain_nodeonly_ce.best.pt"))
+    const preferredCkpt = knownCheckpointFiles.find(x=>String(x).endsWith("gcn_best_0p914_acc.pt"))
+      || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_v6domain_nodeonly_ce.best.pt"))
       || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_v5nodeonly_ce.best.pt"))
       || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_ctx128_focal.best.pt"))
       || knownCheckpointFiles.find(x=>String(x).endsWith("gcn_top1000_ppocrv6_ctx128.best.pt"))
@@ -2901,29 +2914,48 @@ function App(){
                                           {reviewImageNodes.map((node)=>{
                                             const color = labelColor(String(node.picked_label || node.label || "").trim() || "OTHER");
                                             const isActive = activeNodeIndex===node.node_index;
-                                            return nodeHasQuad(node) ? (
-                                              <polygon
-                                                key={`box-poly-${node.node_index}`}
-                                                className="ocr-poly"
-                                                points={nodeQuadPoints(node)}
-                                                fill={isActive ? "rgba(239,68,68,.12)" : color.fill}
-                                                stroke={isActive ? "#ef4444" : color.border}
-                                                strokeWidth="2"
-                                                onClick={()=>setActiveNodeIndex(node.node_index)}
-                                              />
-                                            ) : (
-                                              <rect
-                                                key={`box-rect-${node.node_index}`}
-                                                className="ocr-poly"
-                                                x={Number(node.bbox?.[0]||0)}
-                                                y={Number(node.bbox?.[1]||0)}
-                                                width={Math.max(1, Number((node.bbox?.[2]||0) - (node.bbox?.[0]||0)))}
-                                                height={Math.max(1, Number((node.bbox?.[3]||0) - (node.bbox?.[1]||0)))}
-                                                fill={isActive ? "rgba(239,68,68,.12)" : color.fill}
-                                                stroke={isActive ? "#ef4444" : color.border}
-                                                strokeWidth="2"
-                                                onClick={()=>setActiveNodeIndex(node.node_index)}
-                                              />
+                                            const x = Number(node.bbox?.[0]||0);
+                                            const y = Number(node.bbox?.[1]||0);
+                                            const w = Math.max(1, Number((node.bbox?.[2]||0) - (node.bbox?.[0]||0)));
+                                            const h = Math.max(1, Number((node.bbox?.[3]||0) - (node.bbox?.[1]||0)));
+                                            return (
+                                              <g key={`box-node-${node.node_index}`}>
+                                                {nodeHasQuad(node) ? (
+                                                  <polygon
+                                                    className="ocr-poly"
+                                                    points={nodeQuadPoints(node)}
+                                                    fill={isActive ? "rgba(239,68,68,.18)" : color.fill}
+                                                    stroke={isActive ? "#ef4444" : color.border}
+                                                    strokeWidth={isActive ? 3 : 1.7}
+                                                    vectorEffect="non-scaling-stroke"
+                                                    opacity={isActive ? 1 : .72}
+                                                    filter={isActive ? "drop-shadow(0 0 4px rgba(239,68,68,.65))" : undefined}
+                                                    onClick={()=>setActiveNodeIndex(node.node_index)}
+                                                  />
+                                                ) : (
+                                                  <rect
+                                                    className="ocr-poly"
+                                                    x={x}
+                                                    y={y}
+                                                    width={w}
+                                                    height={h}
+                                                    rx="1.5"
+                                                    fill={isActive ? "rgba(239,68,68,.18)" : color.fill}
+                                                    stroke={isActive ? "#ef4444" : color.border}
+                                                    strokeWidth={isActive ? 3 : 1.7}
+                                                    vectorEffect="non-scaling-stroke"
+                                                    opacity={isActive ? 1 : .72}
+                                                    filter={isActive ? "drop-shadow(0 0 4px rgba(239,68,68,.65))" : undefined}
+                                                    onClick={()=>setActiveNodeIndex(node.node_index)}
+                                                  />
+                                                )}
+                                                {isActive && (
+                                                  <>
+                                                    <rect className="ocr-node-tag-bg" x={Math.max(0, x)} y={Math.max(0, y - 22)} width={String(node.node_index).length * 8 + 34} height="18" rx="5" />
+                                                    <text className="ocr-node-tag" x={Math.max(4, x + 6)} y={Math.max(14, y - 8)}>#{node.node_index}</text>
+                                                  </>
+                                                )}
+                                              </g>
                                             );
                                           })}
                                         </svg>

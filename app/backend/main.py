@@ -246,7 +246,7 @@ class LabelingSuggestDocRequest(BaseModel):
 
 
 class ExportTrainSubsetRequest(BaseModel):
-    input_csv: str = "data/labeling_stage_b/nodes_to_label.csv"
+    input_csv: str = "data/labeling_top1000_ppocrv6/nodes_to_label.csv"
     output_dir: str = "data/train_stage_b"
     limit: int = 1000  # stop after this many fully-labeled images
     label_col: str = "label"
@@ -3266,11 +3266,14 @@ def labeling_gallery(
         except Exception:
             continue
         nodes = payload.get("nodes", []) or []
+        image_relpath = str(payload.get("image_relpath", "")).strip()
+        if image_relpath and not (base / "images" / image_relpath).exists():
+            continue
         scores = [float(n.get("score", 0.0)) for n in nodes]
         metas.append(
             {
                 "doc_id": str(payload.get("doc_id", jp.stem)),
-                "image_relpath": str(payload.get("image_relpath", "")),
+                "image_relpath": image_relpath,
                 "num_nodes": len(nodes),
                 "mean_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
             }
@@ -3406,8 +3409,12 @@ def list_files(dir: str) -> dict[str, Any]:
     if not target.exists() or not target.is_dir():
         return {"dir": dir, "count": 0, "files": []}
     files = []
+    data_dropdown_mode = Path(dir).as_posix().strip("/\\") == "data"
+    allowed_data_suffixes = {".csv", ".json"}
     for p in target.rglob("*"):
         if p.is_file():
+            if data_dropdown_mode and p.suffix.lower() not in allowed_data_suffixes:
+                continue
             files.append(str(p.relative_to(SRC_DIR)))
     return {"dir": dir, "count": len(files), "files": files}
 

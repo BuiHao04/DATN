@@ -66,6 +66,12 @@ class GCNTrainingService:
             raise ValueError(f"Empty dataset: missing samples in {resolved_path}")
         return samples
 
+    def _device(self) -> torch.device:
+        requested = os.environ.get("GCN_DEVICE", "auto").strip().lower()
+        if requested and requested != "auto":
+            return torch.device(requested)
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     def _infer_shape(self, samples: list[dict]) -> tuple[int, int]:
         in_channels = len(samples[0]["x"][0])
         out_channels = max(max(s["y"]) for s in samples) + 1
@@ -151,16 +157,18 @@ class GCNTrainingService:
         samples: list[dict],
         optimizer: torch.optim.Optimizer,
         class_weights: torch.Tensor | None = None,
+        device: torch.device | None = None,
     ) -> float:
+        device = device or torch.device("cpu")
         model.train()
         total_loss = 0.0
         for s in samples:
-            x = torch.tensor(s["x"], dtype=torch.float32)
+            x = torch.tensor(s["x"], dtype=torch.float32, device=device)
             if "edge_index" in s:
-                edge_index = torch.tensor(s["edge_index"], dtype=torch.long)
+                edge_index = torch.tensor(s["edge_index"], dtype=torch.long, device=device)
             else:
-                edge_index = build_edge_index(s.get("edges", []))
-            y = torch.tensor(s["y"], dtype=torch.long)
+                edge_index = build_edge_index(s.get("edges", [])).to(device)
+            y = torch.tensor(s["y"], dtype=torch.long, device=device)
 
             optimizer.zero_grad()
             logits = model(x, edge_index)
@@ -176,19 +184,21 @@ class GCNTrainingService:
         samples: list[dict],
         out_channels: int,
         class_weights: torch.Tensor | None = None,
+        device: torch.device | None = None,
     ) -> dict[str, float]:
+        device = device or torch.device("cpu")
         model.eval()
         total_loss = 0.0
         conf = [[0 for _ in range(out_channels)] for _ in range(out_channels)]
 
         with torch.no_grad():
             for s in samples:
-                x = torch.tensor(s["x"], dtype=torch.float32)
+                x = torch.tensor(s["x"], dtype=torch.float32, device=device)
                 if "edge_index" in s:
-                    edge_index = torch.tensor(s["edge_index"], dtype=torch.long)
+                    edge_index = torch.tensor(s["edge_index"], dtype=torch.long, device=device)
                 else:
-                    edge_index = build_edge_index(s.get("edges", []))
-                y = torch.tensor(s["y"], dtype=torch.long)
+                    edge_index = build_edge_index(s.get("edges", [])).to(device)
+                y = torch.tensor(s["y"], dtype=torch.long, device=device)
 
                 logits = model(x, edge_index)
                 loss = self._loss(logits, y, class_weights=class_weights)
@@ -255,12 +265,15 @@ class GCNTrainingService:
             num_layers=num_layers,
             dropout=dropout,
         )
+        device = self._device()
+        logger.info("[{}] Device: {}", stage_name, device)
+        model = model.to(device)
         if init_checkpoint:
             logger.info("[{}] Load init checkpoint: {}", stage_name, init_checkpoint)
             self._load_init_checkpoint_compatible(model, init_checkpoint, stage_name)
         weight_decay = float(os.environ.get("GCN_WEIGHT_DECAY", "0"))
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-        class_weights = self._class_weights(samples, out_channels)
+        class_weights = self._class_weights(samples, out_channels).to(device)
         logger.info("[{}] Class weights: {}", stage_name, [round(float(v), 3) for v in class_weights.tolist()])
         logger.info(
             "[{}] Loss config: focal_gamma={} label_smoothing={} weight_decay={} class_weight_min={} class_weight_max={}",
@@ -289,11 +302,11 @@ class GCNTrainingService:
         no_improve = 0
 
         for epoch in range(1, epochs + 1):
-            train_loss = self._run_epoch_train(model, samples, optimizer, class_weights=class_weights)
+            train_loss = self._run_epoch_train(model, samples, optimizer, class_weights=class_weights, device=device)
             torch.save(model.state_dict(), last_ckpt)
 
             if val_samples:
-                val_metrics = self._run_eval(model, val_samples, out_channels, class_weights=class_weights)
+                val_metrics = self._run_eval(model, val_samples, out_channels, class_weights=class_weights, device=device)
                 val_score = val_metrics["f1_macro"]
                 improved = val_score > best_score
                 if improved:

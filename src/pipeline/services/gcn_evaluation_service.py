@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ class GCNEvaluationService:
 
         in_channels = len(samples[0]["x"][0])
         out_channels = max(max(s["y"]) for s in samples) + 1
+        requested_device = os.environ.get("GCN_DEVICE", "auto").strip().lower()
+        device = torch.device(requested_device if requested_device and requested_device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
 
         state = torch.load(checkpoint_path, map_location="cpu")
         ckpt_in, hidden_channels, ckpt_out, num_layers = infer_gcn_hparams_from_state(state, in_channels, out_channels)
@@ -40,6 +43,7 @@ class GCNEvaluationService:
             dropout=0.0,
         )
         model.load_state_dict(state)
+        model = model.to(device)
         model.eval()
 
         conf = [[0 for _ in range(out_channels)] for _ in range(out_channels)]
@@ -50,12 +54,12 @@ class GCNEvaluationService:
 
         with torch.no_grad():
             for s in samples:
-                x = torch.tensor(s["x"], dtype=torch.float32)
+                x = torch.tensor(s["x"], dtype=torch.float32, device=device)
                 if "edge_index" in s:
-                    edge_index = torch.tensor(s["edge_index"], dtype=torch.long)
+                    edge_index = torch.tensor(s["edge_index"], dtype=torch.long, device=device)
                 else:
-                    edge_index = build_edge_index(s.get("edges", []))
-                y = torch.tensor(s["y"], dtype=torch.long)
+                    edge_index = build_edge_index(s.get("edges", [])).to(device)
+                y = torch.tensor(s["y"], dtype=torch.long, device=device)
 
                 t0 = time.perf_counter()
                 logits = model(x, edge_index)

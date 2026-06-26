@@ -6,15 +6,19 @@ pydantic==2.9.2
 numpy==1.26.4
 opencv-python==4.10.0.84
 opencv-contrib-python==4.10.0.84
-pillow
-loguru
-python-dotenv
+pillow==10.2.0
+loguru==0.7.3
+python-dotenv==1.2.2
 
-datasets
-transformers
+datasets==5.0.0
+transformers==5.12.1
 
 paddlepaddle==3.2.1
 paddleocr==3.7.0
 vietocr==0.3.13
-torch
-torch-geometric
+
+# RTX 3090 / current driver exposes CUDA 12.0, so avoid latest torch wheels
+# that pull CUDA 13 and make torch.cuda.is_available() false.
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.5.1+cu118
+torch-geometric==2.8.0

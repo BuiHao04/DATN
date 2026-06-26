@@ -51,18 +51,21 @@ class GCNPipelineService:
             dropout=0.0,
         )
         model.load_state_dict(state)
+        requested_device = os.environ.get("GCN_DEVICE", "auto").strip().lower()
+        device = torch.device(requested_device if requested_device and requested_device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+        model = model.to(device)
         model.eval()
 
-        x = build_features(nodes)
+        x = build_features(nodes).to(device)
         if x.shape[1] > in_channels:
             x = x[:, :in_channels]
         elif x.shape[1] < in_channels:
-            pad = torch.zeros((x.shape[0], in_channels - x.shape[1]), dtype=x.dtype)
+            pad = torch.zeros((x.shape[0], in_channels - x.shape[1]), dtype=x.dtype, device=device)
             x = torch.cat([x, pad], dim=1)
         if "nodeonly" in Path(checkpoint_path).stem.lower():
-            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_index = torch.empty((2, 0), dtype=torch.long, device=device)
         else:
-            edge_index = build_edge_index(edges)
+            edge_index = build_edge_index(edges).to(device)
         with torch.no_grad():
             logits = model(x, edge_index)
             temperature = max(float(os.environ.get("GCN_INFER_TEMPERATURE", "1.0")), 1e-6)
